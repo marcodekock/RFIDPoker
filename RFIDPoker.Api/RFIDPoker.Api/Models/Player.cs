@@ -5,6 +5,11 @@ public class Player
     public int SeatNumber { get; set; }
     public string Name { get; set; } = string.Empty;
     public List<Card> HoleCards { get; set; } = [];
+    /// <summary>
+    /// Every hole card this seat has been dealt during the current hand. Persists across
+    /// tag flicker / muck transitions so a "fold via muck" can still be attributed to the
+    /// original seat even after the physical cards have left it.
+    /// </summary>
+    public HashSet<Card> DealtThisHand { get; set; } = [];
     public bool IsFolded { get; set; }
-    public bool IsDealer { get; set; }
 }

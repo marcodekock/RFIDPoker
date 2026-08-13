@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
 using RFIDPoker.Api.Dtos;
 using RFIDPoker.Api.Hubs;
 using RFIDPoker.Api.Models;
@@ -15,11 +16,13 @@ public class PokerAnalysisEngine(
     IHandEvaluator handEvaluator,
     IEquityCalculator equityCalculator,
     IHubContext<AnalysisHub> hubContext,
+    IOptions<RfidConfig> rfidOptions,
     ILogger<PokerAnalysisEngine> logger) : BackgroundService, IPokerAnalysisEngine
 {
     private readonly Channel _channel = new();
     private AnalysisResultDto? _latestResult;
     private CancellationTokenSource? _calculationCts;
+    private readonly int _debounceMs = Math.Max(0, rfidOptions.Value.AnalysisDebounceMs);
 
     public AnalysisResultDto? GetLatestResult() => _latestResult;
 
@@ -44,7 +47,11 @@ public class PokerAnalysisEngine(
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Wait for the first signal in a burst.
             await _channel.WaitAsync(stoppingToken);
+
+            // Debounce: keep resetting the timer while further changes arrive within the window.
+            await DebounceAsync(stoppingToken);
 
             // Cancel any in-progress calculation
             _calculationCts?.Cancel();
@@ -63,15 +70,43 @@ public class PokerAnalysisEngine(
         }
     }
 
+    private async Task DebounceAsync(CancellationToken ct)
+    {
+        if (_debounceMs <= 0) return;
+
+        while (!ct.IsCancellationRequested)
+        {
+            using var iterationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var delayTask = Task.Delay(_debounceMs, iterationCts.Token);
+            var signalTask = _channel.WaitAsync(iterationCts.Token);
+
+            var finished = await Task.WhenAny(delayTask, signalTask);
+
+            // Cancel and observe the loser so we don't leak a zombie waiter on the
+            // semaphore (which would silently swallow future signals).
+            iterationCts.Cancel();
+            try { await Task.WhenAll(delayTask, signalTask); }
+            catch (OperationCanceledException) { }
+
+            if (finished == delayTask) return; // no new signal within window
+            // else another state change arrived; loop and reset the timer
+        }
+    }
+
     private async Task RunAnalysisAsync(CancellationToken ct)
     {
-        // Small debounce to coalesce rapid state changes
-        await Task.Delay(50, ct);
-
-        var activePlayers = tableState.GetActivePlayers();
-        var foldedPlayers = tableState.GetFoldedPlayers();
+        // Only seats that currently hold cards are "in the hand". Seats that were seen
+        // in a previous hand but weren't dealt in this time (player sat out / knocked out)
+        // must be ignored so equity still computes for the remaining players.
+        var activePlayers = tableState.GetActivePlayers()
+            .Where(p => p.HoleCards.Count > 0)
+            .ToList();
+        var foldedPlayers = tableState.GetFoldedPlayers()
+            .Where(p => p.HoleCards.Count > 0)
+            .ToList();
         var communityCards = tableState.CommunityCards.ToList();
         var street = tableState.CurrentStreet;
+        var muckedCards = tableState.MuckedCards.ToList();
 
         var playerAnalyses = new List<PlayerAnalysisDto>();
         var foldedAnalyses = new List<PlayerAnalysisDto>();
@@ -88,8 +123,7 @@ public class PokerAnalysisEngine(
                 HandRank = hand?.Rank,
                 HandDescription = hand?.Description ?? string.Empty,
                 BestFiveCards = hand?.BestFiveCards ?? [],
-                IsFolded = false,
-                IsDealer = player.IsDealer
+                IsFolded = false
             });
         }
 
@@ -100,18 +134,38 @@ public class PokerAnalysisEngine(
                 SeatNumber = player.SeatNumber,
                 PlayerName = player.Name,
                 HoleCards = player.HoleCards.ToList(),
-                IsFolded = true,
-                IsDealer = player.IsDealer
+                IsFolded = true
             });
         }
 
-        // Calculate equity if we have at least 2 active players with hole cards
+        // Calculate equity only when every active player has both hole cards.
+        // Otherwise we'd burn CPU (and mislead the display) on a half-dealt table.
         var playersWithCards = activePlayers.Where(p => p.HoleCards.Count == 2).ToList();
+        var allPlayersDealt = activePlayers.Count >= 2
+            && playersWithCards.Count == activePlayers.Count;
         Dictionary<int, EquityResult>? equity = null;
 
-        if (playersWithCards.Count >= 2)
+        // Always publish an interim result immediately so cards appear on the UI
+        // without waiting for equity. Equity fills in on the follow-up broadcast.
+        var interim = new AnalysisResultDto
         {
-            equity = await equityCalculator.CalculateEquityAsync(playersWithCards, communityCards, cancellationToken: ct);
+            CurrentStreet = street,
+            CommunityCards = communityCards,
+            MuckedCards = muckedCards,
+            ActivePlayers = playerAnalyses,
+            FoldedPlayers = foldedAnalyses,
+            ActivePlayerCount = activePlayers.Count,
+            Timestamp = DateTimeOffset.UtcNow
+        };
+        _latestResult = interim;
+        await hubContext.Clients.All.SendAsync("AnalysisUpdated", interim, ct);
+
+        if (allPlayersDealt)
+        {
+            // Folded players' hole cards + anything on the muck antenna are dead — they can't come back on the board.
+            var deadCards = foldedPlayers.SelectMany(p => p.HoleCards).Concat(muckedCards);
+            equity = await equityCalculator.CalculateEquityAsync(
+                playersWithCards, communityCards, deadCards, cancellationToken: ct);
         }
 
         // Apply equity results
@@ -121,11 +175,13 @@ public class PokerAnalysisEngine(
             {
                 if (equity.TryGetValue(playerAnalyses[i].SeatNumber, out var eq))
                 {
+                    var win = (int)Math.Round(eq.WinPercentage);
+                    var tie = (int)Math.Round(eq.TiePercentage);
                     playerAnalyses[i] = playerAnalyses[i] with
                     {
-                        WinPercentage = Math.Round(eq.WinPercentage, 2),
-                        TiePercentage = Math.Round(eq.TiePercentage, 2),
-                        LosePercentage = Math.Round(eq.LosePercentage, 2)
+                        WinPercentage = win,
+                        TiePercentage = tie,
+                        LosePercentage = Math.Max(0, 100 - win - tie)
                     };
                 }
             }
@@ -135,6 +191,7 @@ public class PokerAnalysisEngine(
         {
             CurrentStreet = street,
             CommunityCards = communityCards,
+            MuckedCards = muckedCards,
             ActivePlayers = playerAnalyses,
             FoldedPlayers = foldedAnalyses,
             ActivePlayerCount = activePlayers.Count,

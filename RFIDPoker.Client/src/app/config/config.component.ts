@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { CalibrationService } from '../services/calibration.service';
 import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
 
@@ -19,7 +20,7 @@ import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
         <div class="readings-grid">
           <div *ngFor="let reading of readings" class="reading-card">
             <div class="reading-header">
-              <span>{{ reading.muxPort }} - Ant {{ reading.antennaIndex }}</span>
+              <span>{{ reading.deviceName }} - Ant {{ reading.antennaIndex }}</span>
               <span class="func-badge">{{ reading.function }}</span>
             </div>
             <div *ngFor="let tag of reading.tagIds" class="tag-row">
@@ -102,25 +103,22 @@ export class ConfigComponent implements OnInit {
   suits = Object.entries(SUIT_NAMES).map(([v, l]) => ({ value: +v, label: l }));
 
   private mappingMap = new Map<string, CardMapping>();
-  private refreshTimer: any;
+  private readingsSub?: Subscription;
 
   constructor(private calibrationService: CalibrationService) {}
 
   ngOnInit(): void {
     this.loadMappings();
-    this.refreshReadings();
-    this.refreshTimer = setInterval(() => this.refreshReadings(), 2000);
+    this.readingsSub = this.calibrationService.readings$.subscribe(r => this.readings = r);
+    this.calibrationService.refreshReadings();
   }
 
   ngOnDestroy(): void {
-    clearInterval(this.refreshTimer);
+    this.readingsSub?.unsubscribe();
   }
 
   refreshReadings(): void {
-    this.calibrationService.getAntennaReadings().subscribe({
-      next: r => this.readings = r,
-      error: () => {}
-    });
+    this.calibrationService.refreshReadings();
   }
 
   loadMappings(): void {

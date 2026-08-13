@@ -44,13 +44,23 @@ public class HandEvaluator : IHandEvaluator
 
         var counts = groups.Select(g => g.Count()).ToList();
 
+        // Order the "best five" so it can be compared element-by-element against another
+        // hand of the same rank: matched cards (pair/trips/quads) first, then kickers
+        // (also grouped) in descending order.
+        var structured = groups.SelectMany(g => g).ToList();
+
         if (isFlush && isStraight)
         {
+            // For a wheel (A-2-3-4-5) the effective ordering puts the 5 first (Ace plays low).
+            var sfCards = straightHigh == Rank.Five
+                ? sorted.Where(c => c.Rank != Rank.Ace).Concat(sorted.Where(c => c.Rank == Rank.Ace)).ToList()
+                : sorted;
+
             if (straightHigh == Rank.Ace)
-                return new HandResult(Models.HandRank.RoyalFlush, "Royal Flush", sorted, []);
+                return new HandResult(Models.HandRank.RoyalFlush, "Royal Flush", sfCards, []);
 
             return new HandResult(Models.HandRank.StraightFlush,
-                $"{straightHigh} High Straight Flush", sorted, []);
+                $"{straightHigh} High Straight Flush", sfCards, []);
         }
 
         if (counts is [4, 1])
@@ -58,13 +68,13 @@ public class HandEvaluator : IHandEvaluator
             var quadRank = groups[0].Key;
             var kicker = groups[1].First();
             return new HandResult(Models.HandRank.FourOfAKind,
-                $"Four of a Kind, {quadRank}s", sorted, [kicker]);
+                $"Four of a Kind, {quadRank}s", structured, [kicker]);
         }
 
         if (counts is [3, 2])
         {
             return new HandResult(Models.HandRank.FullHouse,
-                $"Full House, {groups[0].Key}s over {groups[1].Key}s", sorted, []);
+                $"Full House, {groups[0].Key}s over {groups[1].Key}s", structured, []);
         }
 
         if (isFlush)
@@ -75,29 +85,32 @@ public class HandEvaluator : IHandEvaluator
 
         if (isStraight)
         {
+            var stCards = straightHigh == Rank.Five
+                ? sorted.Where(c => c.Rank != Rank.Ace).Concat(sorted.Where(c => c.Rank == Rank.Ace)).ToList()
+                : sorted;
             return new HandResult(Models.HandRank.Straight,
-                $"{straightHigh} High Straight", sorted, []);
+                $"{straightHigh} High Straight", stCards, []);
         }
 
         if (counts is [3, 1, 1])
         {
             var kickers = groups.Skip(1).Select(g => g.First()).ToList();
             return new HandResult(Models.HandRank.ThreeOfAKind,
-                $"Three of a Kind, {groups[0].Key}s", sorted, kickers);
+                $"Three of a Kind, {groups[0].Key}s", structured, kickers);
         }
 
         if (counts is [2, 2, 1])
         {
             var kicker = groups[2].First();
             return new HandResult(Models.HandRank.TwoPair,
-                $"Two Pair, {groups[0].Key}s and {groups[1].Key}s", sorted, [kicker]);
+                $"Two Pair, {groups[0].Key}s and {groups[1].Key}s", structured, [kicker]);
         }
 
         if (counts is [2, 1, 1, 1])
         {
             var kickers = groups.Skip(1).Select(g => g.First()).ToList();
             return new HandResult(Models.HandRank.OnePair,
-                $"Pair of {groups[0].Key}s", sorted, kickers);
+                $"Pair of {groups[0].Key}s", structured, kickers);
         }
 
         var highKickers = sorted.Skip(1).ToList();

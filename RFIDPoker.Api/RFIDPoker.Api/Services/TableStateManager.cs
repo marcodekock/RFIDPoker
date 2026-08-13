@@ -6,19 +6,17 @@ public interface ITableStateManager
 {
     List<Player> Players { get; }
     List<Card> CommunityCards { get; }
+    IReadOnlyList<Card> MuckedCards { get; }
     Street CurrentStreet { get; }
     event Action? StateChanged;
 
     void SetPlayerHoleCards(int seatNumber, List<Card> cards);
+    void AddMuckedCards(IEnumerable<Card> cards);
+    void RemoveMuckedCards(IEnumerable<Card> cards);
     void FoldPlayer(int seatNumber);
     void UnfoldPlayer(int seatNumber);
     void SetCommunityCards(List<Card> cards);
-    void AddCommunityCard(Card card);
-    void RemoveCommunityCard(Card card);
-    void SetDealer(int seatNumber);
     void NewHand();
-    void AddPlayer(int seatNumber, string name);
-    void RemovePlayer(int seatNumber);
     List<Player> GetActivePlayers();
     List<Player> GetFoldedPlayers();
 }
@@ -29,6 +27,46 @@ public class TableStateManager : ITableStateManager
 
     public List<Player> Players { get; } = [];
     public List<Card> CommunityCards { get; } = [];
+    private readonly List<Card> _muckedCards = [];
+    private readonly HashSet<Card> _muckedSet = [];
+    public IReadOnlyList<Card> MuckedCards
+    {
+        get { lock (_lock) { return _muckedCards.ToList(); } }
+    }
+
+    public void AddMuckedCards(IEnumerable<Card> cards)
+    {
+        bool added = false;
+        lock (_lock)
+        {
+            foreach (var c in cards)
+            {
+                if (_muckedSet.Add(c))
+                {
+                    _muckedCards.Add(c);
+                    added = true;
+                }
+            }
+        }
+        if (added) StateChanged?.Invoke();
+    }
+
+    public void RemoveMuckedCards(IEnumerable<Card> cards)
+    {
+        bool removed = false;
+        lock (_lock)
+        {
+            foreach (var c in cards)
+            {
+                if (_muckedSet.Remove(c))
+                {
+                    _muckedCards.Remove(c);
+                    removed = true;
+                }
+            }
+        }
+        if (removed) StateChanged?.Invoke();
+    }
     public Street CurrentStreet => CommunityCards.Count switch
     {
         0 => Street.PreFlop,
@@ -45,7 +83,12 @@ public class TableStateManager : ITableStateManager
         lock (_lock)
         {
             var player = GetOrCreatePlayer(seatNumber);
+            // Once a player is folded, keep the hole cards they were dealt so they
+            // still show up in the folded list even after the physical cards leave
+            // the seat antenna (e.g. slid into the muck).
+            if (player.IsFolded && cards.Count == 0) return;
             player.HoleCards = cards;
+            foreach (var c in cards) player.DealtThisHand.Add(c);
         }
         StateChanged?.Invoke();
     }
@@ -80,56 +123,19 @@ public class TableStateManager : ITableStateManager
         StateChanged?.Invoke();
     }
 
-    public void AddCommunityCard(Card card)
-    {
-        lock (_lock) { CommunityCards.Add(card); }
-        StateChanged?.Invoke();
-    }
-
-    public void RemoveCommunityCard(Card card)
-    {
-        lock (_lock) { CommunityCards.Remove(card); }
-        StateChanged?.Invoke();
-    }
-
-    public void SetDealer(int seatNumber)
-    {
-        lock (_lock)
-        {
-            foreach (var p in Players) p.IsDealer = p.SeatNumber == seatNumber;
-        }
-        StateChanged?.Invoke();
-    }
-
     public void NewHand()
     {
         lock (_lock)
         {
             CommunityCards.Clear();
+            _muckedCards.Clear();
+            _muckedSet.Clear();
             foreach (var p in Players)
             {
                 p.HoleCards.Clear();
+                p.DealtThisHand.Clear();
                 p.IsFolded = false;
             }
-        }
-        StateChanged?.Invoke();
-    }
-
-    public void AddPlayer(int seatNumber, string name)
-    {
-        lock (_lock)
-        {
-            if (Players.All(p => p.SeatNumber != seatNumber))
-                Players.Add(new Player { SeatNumber = seatNumber, Name = name });
-        }
-        StateChanged?.Invoke();
-    }
-
-    public void RemovePlayer(int seatNumber)
-    {
-        lock (_lock)
-        {
-            Players.RemoveAll(p => p.SeatNumber == seatNumber);
         }
         StateChanged?.Invoke();
     }

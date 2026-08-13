@@ -8,7 +8,10 @@ namespace RFIDPoker.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class CalibrationController(ICardTagMapper cardMapper, IOptions<RfidConfig> rfidConfig) : ControllerBase
+public class CalibrationController(
+    ICardTagMapper cardMapper,
+    IOptions<RfidConfig> rfidConfig,
+    IRfidReaderService rfidReader) : ControllerBase
 {
     [HttpGet("mappings")]
     public ActionResult<List<CardMappingDto>> GetMappings()
@@ -33,26 +36,11 @@ public class CalibrationController(ICardTagMapper cardMapper, IOptions<RfidConfi
     [HttpDelete("mappings/{tagId}")]
     public IActionResult DeleteMapping(string tagId)
     {
-        // For simplicity, re-register is the pattern; deletion would require extending ICardTagMapper
-        return NoContent();
+        var removed = cardMapper.DeleteMapping(tagId);
+        return removed ? NoContent() : NotFound();
     }
 
     [HttpGet("readings")]
     public ActionResult<List<AntennaReadingDto>> GetAntennaReadings()
-    {
-        // This returns the current config so the UI knows antenna layout
-        var readings = new List<AntennaReadingDto>();
-        foreach (var mux in rfidConfig.Value.Muxes)
-        {
-            foreach (var antenna in mux.Antennas)
-            {
-                readings.Add(new AntennaReadingDto(
-                    mux.PortName,
-                    antenna.AntennaIndex,
-                    antenna.Function.ToString(),
-                    []));
-            }
-        }
-        return Ok(readings);
-    }
+        => Ok(rfidReader.GetReadingsSnapshot());
 }

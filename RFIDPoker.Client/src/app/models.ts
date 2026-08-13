@@ -14,12 +14,12 @@ export interface PlayerAnalysis {
   tiePercentage: number;
   losePercentage: number;
   isFolded: boolean;
-  isDealer: boolean;
 }
 
 export interface AnalysisResult {
   currentStreet: number;
   communityCards: Card[];
+  muckedCards: Card[];
   activePlayers: PlayerAnalysis[];
   foldedPlayers: PlayerAnalysis[];
   activePlayerCount: number;
@@ -33,7 +33,7 @@ export interface CardMapping {
 }
 
 export interface AntennaReading {
-  muxPort: string;
+  deviceName: string;
   antennaIndex: number;
   function: string;
   tagIds: string[];

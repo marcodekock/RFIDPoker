@@ -10,6 +10,17 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
   imports: [CommonModule],
   template: `
     <div class="display-container" *ngIf="analysis">
+      <div class="muck-panel" *ngIf="analysis.muckedCards?.length">
+        <h3>Muck <span class="muck-count">{{ analysis.muckedCards.length }}</span></h3>
+        <div class="muck-cards">
+          <div *ngFor="let card of analysis.muckedCards"
+               class="card-display small"
+               [ngClass]="getSuitClass(card.suit)">
+            {{ getCardLabel(card) }}
+          </div>
+        </div>
+      </div>
+
       <header>
         <h1>RFID Poker</h1>
         <span class="street-badge">{{ getStreetName(analysis.currentStreet) }}</span>
@@ -30,12 +41,10 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
 
       <section class="players-grid">
         <div *ngFor="let player of analysis.activePlayers"
-             class="player-card"
-             [class.dealer]="player.isDealer">
+             class="player-card">
           <div class="player-header">
             <span class="seat">Seat {{ player.seatNumber }}</span>
             <span class="name">{{ player.playerName }}</span>
-            <span *ngIf="player.isDealer" class="dealer-badge">D</span>
           </div>
 
           <div class="hole-cards">
@@ -71,6 +80,14 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
             <span class="name">{{ player.playerName }}</span>
             <span class="fold-badge">FOLDED</span>
           </div>
+
+          <div class="hole-cards" *ngIf="player.holeCards?.length">
+            <div *ngFor="let card of player.holeCards"
+                 class="card-display dim"
+                 [ngClass]="getSuitClass(card.suit)">
+              {{ getCardLabel(card) }}
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -80,7 +97,12 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
     </div>
   `,
   styles: [`
-    .display-container { padding: 1rem; }
+    .display-container { padding: 1rem; position: relative; }
+    .muck-panel { position: absolute; top: 1rem; right: 1rem; background: #1a1a2e; border: 1px solid #333; border-radius: 6px; padding: 0.5rem 0.75rem; max-width: 320px; z-index: 10; }
+    .muck-panel h3 { margin: 0 0 0.4rem 0; font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.4rem; }
+    .muck-panel .muck-count { background: #e74c3c; color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 0.7rem; }
+    .muck-cards { display: flex; flex-wrap: wrap; gap: 3px; }
+    .card-display.small { font-size: 0.75rem; padding: 2px 5px; min-width: 26px; }
     header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
     h1 { font-size: 1.5rem; color: #e94560; }
     .player-count { color: #888; font-size: 0.9rem; }
@@ -94,6 +116,8 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
     .name { font-weight: bold; }
     .dealer-badge { background: #f39c12; color: #000; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: bold; }
     .fold-badge { background: #e74c3c; color: white; border-radius: 4px; padding: 2px 6px; font-size: 0.7rem; }
+    .player-card.folded { opacity: 0.45; }
+    .card-display.dim { opacity: 0.5; filter: grayscale(0.6); }
     .hole-cards { display: flex; gap: 4px; margin-bottom: 0.5rem; }
     .hand-info { margin-bottom: 0.5rem; }
     .hand-desc { color: #27ae60; font-size: 0.85rem; }

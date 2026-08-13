@@ -9,7 +9,8 @@ public interface IEquityCalculator
     Task<Dictionary<int, EquityResult>> CalculateEquityAsync(
         List<Player> activePlayers,
         List<Card> communityCards,
-        int iterations = 100_000,
+        IEnumerable<Card>? deadCards = null,
+        int iterations = 0,
         CancellationToken cancellationToken = default);
 }
 
@@ -18,58 +19,98 @@ public class EquityCalculator(IHandEvaluator handEvaluator) : IEquityCalculator
     public Task<Dictionary<int, EquityResult>> CalculateEquityAsync(
         List<Player> activePlayers,
         List<Card> communityCards,
-        int iterations = 100_000,
+        IEnumerable<Card>? deadCards = null,
+        int iterations = 0,
         CancellationToken cancellationToken = default)
     {
-        return Task.Run(() => Calculate(activePlayers, communityCards, iterations, cancellationToken), cancellationToken);
+        // Adaptive iteration count by street: preflop needs the most samples,
+        // and each additional community card sharply reduces variance.
+        if (iterations <= 0)
+        {
+            iterations = communityCards.Count switch
+            {
+                0 => 10_000, // preflop
+                3 => 5_000,  // flop
+                4 => 2_000,  // turn
+                _ => 1_000
+            };
+        }
+
+        var dead = deadCards?.ToList() ?? [];
+        return Task.Run(() => Calculate(activePlayers, communityCards, dead, iterations, cancellationToken), cancellationToken);
     }
 
     private Dictionary<int, EquityResult> Calculate(
         List<Player> activePlayers,
         List<Card> communityCards,
+        List<Card> deadCards,
         int iterations,
         CancellationToken ct)
     {
-        var wins = new Dictionary<int, int>();
-        var ties = new Dictionary<int, int>();
-
-        foreach (var p in activePlayers)
-        {
-            wins[p.SeatNumber] = 0;
-            ties[p.SeatNumber] = 0;
-        }
-
         // If all community cards are dealt (river), do exact evaluation
         if (communityCards.Count == 5)
         {
             return CalculateExact(activePlayers, communityCards);
         }
 
+        // Cards that must not be dealt onto the simulated board:
+        //   - already on the board
+        //   - held by any active player (including hole cards not yet dealt-out here)
+        //   - held by folded/mucked players (their cards are dead but still off the deck)
         var usedCards = new HashSet<Card>(
-            communityCards.Concat(activePlayers.SelectMany(p => p.HoleCards)));
+            communityCards
+                .Concat(activePlayers.SelectMany(p => p.HoleCards))
+                .Concat(deadCards));
 
-        var deck = BuildDeck().Where(c => !usedCards.Contains(c)).ToList();
+        var deckTemplate = BuildDeck().Where(c => !usedCards.Contains(c)).ToArray();
         var cardsNeeded = 5 - communityCards.Count;
-        var random = new Random();
+        var seats = activePlayers.Select(p => p.SeatNumber).ToArray();
+        var seatIndex = seats
+            .Select((s, i) => (s, i))
+            .ToDictionary(x => x.s, x => x.i);
 
-        for (int i = 0; i < iterations; i++)
+        var totalWins = new int[seats.Length];
+        var totalTies = new int[seats.Length];
+
+        var parallelOptions = new ParallelOptions
         {
-            ct.ThrowIfCancellationRequested();
+            CancellationToken = ct,
+            MaxDegreeOfParallelism = Environment.ProcessorCount
+        };
 
-            var simBoard = new List<Card>(communityCards);
-            Shuffle(deck, random, cardsNeeded);
-            for (int j = 0; j < cardsNeeded; j++)
-                simBoard.Add(deck[j]);
+        Parallel.For(0, iterations, parallelOptions,
+            () => new ThreadLocalState(deckTemplate, seats.Length),
+            (i, _, state) =>
+            {
+                state.ShuffleFirst(cardsNeeded);
 
-            EvaluateWinners(activePlayers, simBoard, wins, ties);
-        }
+                // Build the simulated board without allocating a new list each iteration.
+                state.SimBoard.Clear();
+                state.SimBoard.AddRange(communityCards);
+                for (int j = 0; j < cardsNeeded; j++)
+                    state.SimBoard.Add(state.Deck[j]);
+
+                EvaluateWinners(activePlayers, state.SimBoard, seatIndex, state.Wins, state.Ties);
+                return state;
+            },
+            state =>
+            {
+                lock (totalWins)
+                {
+                    for (int i = 0; i < seats.Length; i++)
+                    {
+                        totalWins[i] += state.Wins[i];
+                        totalTies[i] += state.Ties[i];
+                    }
+                }
+            });
 
         var results = new Dictionary<int, EquityResult>();
-        foreach (var p in activePlayers)
+        for (int i = 0; i < seats.Length; i++)
         {
-            double w = (double)wins[p.SeatNumber] / iterations * 100;
-            double t = (double)ties[p.SeatNumber] / iterations * 100;
-            results[p.SeatNumber] = new EquityResult(w, t, 100 - w - t);
+            double w = (double)totalWins[i] / iterations * 100;
+            double t = (double)totalTies[i] / iterations * 100;
+            results[seats[i]] = new EquityResult(w, t, 100 - w - t);
         }
 
         return results;
@@ -77,54 +118,77 @@ public class EquityCalculator(IHandEvaluator handEvaluator) : IEquityCalculator
 
     private Dictionary<int, EquityResult> CalculateExact(List<Player> activePlayers, List<Card> communityCards)
     {
-        var wins = new Dictionary<int, int>();
-        var ties = new Dictionary<int, int>();
-        foreach (var p in activePlayers)
-        {
-            wins[p.SeatNumber] = 0;
-            ties[p.SeatNumber] = 0;
-        }
+        var seats = activePlayers.Select(p => p.SeatNumber).ToArray();
+        var seatIndex = seats
+            .Select((s, i) => (s, i))
+            .ToDictionary(x => x.s, x => x.i);
 
-        EvaluateWinners(activePlayers, communityCards, wins, ties);
+        var wins = new int[seats.Length];
+        var ties = new int[seats.Length];
+
+        EvaluateWinners(activePlayers, communityCards, seatIndex, wins, ties);
 
         var results = new Dictionary<int, EquityResult>();
-        foreach (var p in activePlayers)
+        for (int i = 0; i < seats.Length; i++)
         {
-            double w = wins[p.SeatNumber] * 100.0;
-            double t = ties[p.SeatNumber] * 100.0;
-            results[p.SeatNumber] = new EquityResult(w, t, 100 - w - t);
+            double w = wins[i] * 100.0;
+            double t = ties[i] * 100.0;
+            results[seats[i]] = new EquityResult(w, t, 100 - w - t);
         }
 
         return results;
     }
 
     private void EvaluateWinners(List<Player> players, List<Card> board,
-        Dictionary<int, int> wins, Dictionary<int, int> ties)
+        Dictionary<int, int> seatIndex, int[] wins, int[] ties)
     {
-        var hands = new List<(int Seat, HandResult Result)>();
+        HandResult? bestResult = null;
+        int bestSeatIdx = -1;
+        int tieCount = 0;
+        Span<int> tiedIndices = stackalloc int[players.Count];
 
         foreach (var p in players)
         {
             var result = handEvaluator.EvaluateBestHand(p.HoleCards, board);
-            if (result is not null)
-                hands.Add((p.SeatNumber, result));
+            if (result is null) continue;
+
+            var idx = seatIndex[p.SeatNumber];
+
+            if (bestResult is null)
+            {
+                bestResult = result;
+                bestSeatIdx = idx;
+                tieCount = 0;
+                continue;
+            }
+
+            var cmp = HandEvaluator.CompareHands(result, bestResult);
+            if (cmp > 0)
+            {
+                bestResult = result;
+                bestSeatIdx = idx;
+                tieCount = 0;
+            }
+            else if (cmp == 0)
+            {
+                if (tieCount == 0)
+                {
+                    tiedIndices[tieCount++] = bestSeatIdx;
+                }
+                tiedIndices[tieCount++] = idx;
+            }
         }
 
-        if (hands.Count == 0) return;
+        if (bestResult is null) return;
 
-        hands.Sort((a, b) => HandEvaluator.CompareHands(b.Result, a.Result));
-
-        var bestResult = hands[0].Result;
-        var winners = hands.Where(h => HandEvaluator.CompareHands(h.Result, bestResult) == 0).ToList();
-
-        if (winners.Count == 1)
+        if (tieCount == 0)
         {
-            wins[winners[0].Seat]++;
+            wins[bestSeatIdx]++;
         }
         else
         {
-            foreach (var w in winners)
-                ties[w.Seat]++;
+            for (int i = 0; i < tieCount; i++)
+                ties[tiedIndices[i]]++;
         }
     }
 
@@ -137,12 +201,32 @@ public class EquityCalculator(IHandEvaluator handEvaluator) : IEquityCalculator
         return deck;
     }
 
-    private static void Shuffle(List<Card> deck, Random random, int count)
+    private sealed class ThreadLocalState
     {
-        for (int i = 0; i < count; i++)
+        public readonly Card[] Deck;
+        public readonly List<Card> SimBoard;
+        public readonly int[] Wins;
+        public readonly int[] Ties;
+        public readonly Random Rng;
+
+        public ThreadLocalState(Card[] deckTemplate, int playerCount)
         {
-            int j = random.Next(i, deck.Count);
-            (deck[i], deck[j]) = (deck[j], deck[i]);
+            Deck = (Card[])deckTemplate.Clone();
+            SimBoard = new List<Card>(5);
+            Wins = new int[playerCount];
+            Ties = new int[playerCount];
+            // Random.Shared is thread-safe but slower per call; a per-thread instance is fastest.
+            Rng = new Random(Guid.NewGuid().GetHashCode());
+        }
+
+        /// <summary>Partial Fisher-Yates: shuffles the first <paramref name="count"/> slots of the deck.</summary>
+        public void ShuffleFirst(int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                int j = Rng.Next(i, Deck.Length);
+                (Deck[i], Deck[j]) = (Deck[j], Deck[i]);
+            }
         }
     }
 }

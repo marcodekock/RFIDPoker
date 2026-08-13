@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+using RFIDPoker.Api.Data;
 using RFIDPoker.Api.Hubs;
 using RFIDPoker.Api.Models;
 using RFIDPoker.Api.Services;
@@ -29,8 +31,16 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PokerAnalysisEngin
 
 // RFID reader services
 builder.Services.Configure<RfidConfig>(builder.Configuration.GetSection(RfidConfig.SectionName));
+
+var connectionString = builder.Configuration.GetConnectionString("AppDb")
+    ?? "Data Source=rfidpoker.db";
+builder.Services.AddDbContext<AppDbContext>(o => o.UseSqlite(connectionString));
+
 builder.Services.AddSingleton<ICardTagMapper, CardTagMapper>();
-builder.Services.AddHostedService<RfidReaderService>();
+builder.Services.AddSingleton<RfidReaderService>();
+builder.Services.AddSingleton<IRfidReaderService>(sp => sp.GetRequiredService<RfidReaderService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RfidReaderService>());
+builder.Services.AddHostedService<IdleHandResetService>();
 
 var app = builder.Build();
 
