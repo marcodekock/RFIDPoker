@@ -6,6 +6,7 @@ export interface Card {
 export interface PlayerAnalysis {
   seatNumber: number;
   playerName: string;
+  chipCount?: number | null;
   holeCards: Card[];
   handRank: number | null;
   handDescription: string;
@@ -18,12 +19,20 @@ export interface PlayerAnalysis {
 
 export interface AnalysisResult {
   currentStreet: number;
+  blinds?: string | null;
   communityCards: Card[];
   muckedCards: Card[];
   activePlayers: PlayerAnalysis[];
   foldedPlayers: PlayerAnalysis[];
   activePlayerCount: number;
+  headsUpOuts?: HeadsUpOuts | null;
   timestamp: string;
+}
+
+export interface HeadsUpOuts {
+  seatNumber: number;
+  playerName: string;
+  outs: Card[];
 }
 
 export interface CardMapping {

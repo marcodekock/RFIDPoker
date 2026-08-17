@@ -13,7 +13,7 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
       <div class="muck-panel" *ngIf="analysis.muckedCards?.length">
         <h3>Muck <span class="muck-count">{{ analysis.muckedCards.length }}</span></h3>
         <div class="muck-cards">
-          <div *ngFor="let card of analysis.muckedCards"
+          <div *ngFor="let card of analysis.muckedCards; trackBy: trackCard"
                class="card-display small"
                [ngClass]="getSuitClass(card.suit)">
             {{ getCardLabel(card) }}
@@ -24,69 +24,110 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
       <header>
         <h1>RFID Poker</h1>
         <span class="street-badge">{{ getStreetName(analysis.currentStreet) }}</span>
+        <span class="blinds-badge" *ngIf="analysis.blinds">Blinds {{ analysis.blinds }}</span>
         <span class="player-count">{{ analysis.activePlayerCount }} players</span>
       </header>
 
-      <section class="community-cards">
-        <h2>Board</h2>
-        <div class="cards-row">
-          <div *ngFor="let card of analysis.communityCards"
-               class="card-display"
-               [ngClass]="getSuitClass(card.suit)">
-            {{ getCardLabel(card) }}
+      <section class="table-layout">
+        <div class="players-column left">
+          <div *ngFor="let player of leftPlayers; trackBy: trackPlayer"
+               class="player-card"
+               [class.folded]="player.folded">
+            <div class="player-header">
+              <span class="seat">Seat {{ player.seatNumber }}</span>
+              <span class="name">{{ player.playerName }}</span>
+              <span class="fold-badge" *ngIf="player.folded">FOLDED</span>
+            </div>
+
+            <div class="chip-count" [class.placeholder]="player.chipCount == null">
+              <span *ngIf="player.chipCount != null">{{ player.chipCount | number }} chips</span>
+              <span *ngIf="player.chipCount == null">&nbsp;</span>
+            </div>
+
+            <div class="hole-cards" *ngIf="player.holeCards?.length">
+              <div *ngFor="let card of player.holeCards; trackBy: trackCard"
+                   class="card-display"
+                   [ngClass]="getSuitClass(card.suit)"
+                   [class.dim]="player.folded">
+                {{ getCardLabel(card) }}
+              </div>
+            </div>
+
+            <ng-container *ngIf="!player.folded">
+              <div class="hand-info" *ngIf="player.handDescription">
+                <span class="hand-desc">{{ player.handDescription }}</span>
+              </div>
+
+              <div class="equity" *ngIf="player.winPercentage > 0">
+                <div class="equity-row">
+                  <span>Win</span>
+                  <div class="equity-bar"><div class="fill" [style.width.%]="player.winPercentage"></div></div>
+                  <span>{{ player.winPercentage | number:'1.1-1' }}%</span>
+                </div>
+                <div class="equity-row">
+                  <span>Tie</span>
+                  <div class="equity-bar"><div class="fill tie" [style.width.%]="player.tiePercentage"></div></div>
+                  <span>{{ player.tiePercentage | number:'1.1-1' }}%</span>
+                </div>
+              </div>
+            </ng-container>
           </div>
-          <div *ngFor="let _ of getEmptySlots()" class="card-display empty">?</div>
         </div>
-      </section>
 
-      <section class="players-grid">
-        <div *ngFor="let player of analysis.activePlayers"
-             class="player-card">
-          <div class="player-header">
-            <span class="seat">Seat {{ player.seatNumber }}</span>
-            <span class="name">{{ player.playerName }}</span>
-          </div>
-
-          <div class="hole-cards">
-            <div *ngFor="let card of player.holeCards"
+        <section class="community-cards">
+          <h2>Board</h2>
+          <div class="cards-row">
+            <div *ngFor="let card of analysis.communityCards; trackBy: trackCard"
                  class="card-display"
                  [ngClass]="getSuitClass(card.suit)">
               {{ getCardLabel(card) }}
             </div>
+            <div *ngFor="let slot of getEmptySlots(); trackBy: trackIndex" class="card-display empty">?</div>
           </div>
+        </section>
 
-          <div class="hand-info" *ngIf="player.handDescription">
-            <span class="hand-desc">{{ player.handDescription }}</span>
-          </div>
-
-          <div class="equity" *ngIf="player.winPercentage > 0">
-            <div class="equity-row">
-              <span>Win</span>
-              <div class="equity-bar"><div class="fill" [style.width.%]="player.winPercentage"></div></div>
-              <span>{{ player.winPercentage | number:'1.1-1' }}%</span>
+        <div class="players-column right">
+          <div *ngFor="let player of rightPlayers; trackBy: trackPlayer"
+               class="player-card"
+               [class.folded]="player.folded">
+            <div class="player-header">
+              <span class="seat">Seat {{ player.seatNumber }}</span>
+              <span class="name">{{ player.playerName }}</span>
+              <span class="fold-badge" *ngIf="player.folded">FOLDED</span>
             </div>
-            <div class="equity-row">
-              <span>Tie</span>
-              <div class="equity-bar"><div class="fill tie" [style.width.%]="player.tiePercentage"></div></div>
-              <span>{{ player.tiePercentage | number:'1.1-1' }}%</span>
-            </div>
-          </div>
-        </div>
 
-        <div *ngFor="let player of analysis.foldedPlayers"
-             class="player-card folded">
-          <div class="player-header">
-            <span class="seat">Seat {{ player.seatNumber }}</span>
-            <span class="name">{{ player.playerName }}</span>
-            <span class="fold-badge">FOLDED</span>
-          </div>
-
-          <div class="hole-cards" *ngIf="player.holeCards?.length">
-            <div *ngFor="let card of player.holeCards"
-                 class="card-display dim"
-                 [ngClass]="getSuitClass(card.suit)">
-              {{ getCardLabel(card) }}
+            <div class="chip-count" [class.placeholder]="player.chipCount == null">
+              <span *ngIf="player.chipCount != null">{{ player.chipCount | number }} chips</span>
+              <span *ngIf="player.chipCount == null">&nbsp;</span>
             </div>
+
+            <div class="hole-cards" *ngIf="player.holeCards?.length">
+              <div *ngFor="let card of player.holeCards; trackBy: trackCard"
+                   class="card-display"
+                   [ngClass]="getSuitClass(card.suit)"
+                   [class.dim]="player.folded">
+                {{ getCardLabel(card) }}
+              </div>
+            </div>
+
+            <ng-container *ngIf="!player.folded">
+              <div class="hand-info" *ngIf="player.handDescription">
+                <span class="hand-desc">{{ player.handDescription }}</span>
+              </div>
+
+              <div class="equity" *ngIf="player.winPercentage > 0">
+                <div class="equity-row">
+                  <span>Win</span>
+                  <div class="equity-bar"><div class="fill" [style.width.%]="player.winPercentage"></div></div>
+                  <span>{{ player.winPercentage | number:'1.1-1' }}%</span>
+                </div>
+                <div class="equity-row">
+                  <span>Tie</span>
+                  <div class="equity-bar"><div class="fill tie" [style.width.%]="player.tiePercentage"></div></div>
+                  <span>{{ player.tiePercentage | number:'1.1-1' }}%</span>
+                </div>
+              </div>
+            </ng-container>
           </div>
         </div>
       </section>
@@ -106,11 +147,17 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
     header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
     h1 { font-size: 1.5rem; color: #e94560; }
     .player-count { color: #888; font-size: 0.9rem; }
-    .community-cards { margin-bottom: 2rem; text-align: center; }
+    .blinds-badge { background: #0f3460; color: #ffd166; border-radius: 4px; padding: 2px 8px; font-size: 0.85rem; font-weight: 600; letter-spacing: 0.03em; }
+    .chip-count { color: #ffd166; font-size: 0.8rem; margin-bottom: 0.4rem; font-weight: 600; min-height: 1em; line-height: 1; }
+    .chip-count.placeholder { visibility: hidden; }
+    .community-cards { text-align: center; align-self: center; }
     .community-cards h2 { margin-bottom: 0.5rem; font-size: 1rem; color: #888; }
     .cards-row { display: flex; justify-content: center; gap: 4px; }
     .card-display.empty { background: #333; color: #666; border-color: #555; }
-    .players-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+    .table-layout { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 1rem; align-items: start; }
+    .players-column { display: grid; grid-auto-flow: column; grid-template-rows: repeat(3, auto); grid-auto-columns: minmax(220px, 240px); gap: 1rem; }
+    .players-column.right { direction: rtl; }
+    .players-column.right > * { direction: ltr; }
     .player-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
     .seat { color: #888; font-size: 0.8rem; }
     .name { font-weight: bold; }
@@ -166,4 +213,27 @@ export class DisplayComponent implements OnInit, OnDestroy {
     const shown = this.analysis?.communityCards?.length ?? 0;
     return Array(5 - shown).fill(0);
   }
+
+  get allPlayers(): (PlayerAnalysis & { folded: boolean })[] {
+    if (!this.analysis) return [];
+    const active = (this.analysis.activePlayers ?? []).map(p => ({ ...p, folded: false }));
+    const folded = (this.analysis.foldedPlayers ?? []).map(p => ({ ...p, folded: true }));
+    return [...active, ...folded].sort((a, b) => a.seatNumber - b.seatNumber);
+  }
+
+  get leftPlayers(): (PlayerAnalysis & { folded: boolean })[] {
+    const all = this.allPlayers;
+    const half = Math.ceil(all.length / 2);
+    return all.slice(0, half);
+  }
+
+  get rightPlayers(): (PlayerAnalysis & { folded: boolean })[] {
+    const all = this.allPlayers;
+    const half = Math.ceil(all.length / 2);
+    return all.slice(half);
+  }
+
+  trackCard = (_: number, card: { rank: number; suit: number }) => `${card.rank}-${card.suit}`;
+  trackPlayer = (_: number, player: { seatNumber: number }) => player.seatNumber;
+  trackIndex = (i: number) => i;
 }

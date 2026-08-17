@@ -119,6 +119,7 @@ public class PokerAnalysisEngine(
             {
                 SeatNumber = player.SeatNumber,
                 PlayerName = player.Name,
+                ChipCount = player.ChipCount,
                 HoleCards = player.HoleCards.ToList(),
                 HandRank = hand?.Rank,
                 HandDescription = hand?.Description ?? string.Empty,
@@ -133,6 +134,7 @@ public class PokerAnalysisEngine(
             {
                 SeatNumber = player.SeatNumber,
                 PlayerName = player.Name,
+                ChipCount = player.ChipCount,
                 HoleCards = player.HoleCards.ToList(),
                 IsFolded = true
             });
@@ -145,16 +147,22 @@ public class PokerAnalysisEngine(
             && playersWithCards.Count == activePlayers.Count;
         Dictionary<int, EquityResult>? equity = null;
 
+        // Heads-up outs: compute once and reuse on both interim + final broadcasts so the
+        // top-left tab doesn't flicker between updates.
+        var headsUpOuts = ComputeHeadsUpOuts(activePlayers, foldedPlayers, communityCards, muckedCards);
+
         // Always publish an interim result immediately so cards appear on the UI
         // without waiting for equity. Equity fills in on the follow-up broadcast.
         var interim = new AnalysisResultDto
         {
             CurrentStreet = street,
+            Blinds = tableState.Blinds,
             CommunityCards = communityCards,
             MuckedCards = muckedCards,
             ActivePlayers = playerAnalyses,
             FoldedPlayers = foldedAnalyses,
             ActivePlayerCount = activePlayers.Count,
+            HeadsUpOuts = headsUpOuts,
             Timestamp = DateTimeOffset.UtcNow
         };
         _latestResult = interim;
@@ -190,17 +198,91 @@ public class PokerAnalysisEngine(
         var result = new AnalysisResultDto
         {
             CurrentStreet = street,
+            Blinds = tableState.Blinds,
             CommunityCards = communityCards,
             MuckedCards = muckedCards,
             ActivePlayers = playerAnalyses,
             FoldedPlayers = foldedAnalyses,
             ActivePlayerCount = activePlayers.Count,
+            HeadsUpOuts = headsUpOuts,
             Timestamp = DateTimeOffset.UtcNow
         };
 
         _latestResult = result;
 
         await hubContext.Clients.All.SendAsync("AnalysisUpdated", result, ct);
+    }
+
+    /// <summary>
+    /// When exactly two players remain in the hand and the board is on the flop or turn,
+    /// determine which player is behind and enumerate the cards that would flip the lead
+    /// to them on the next street.
+    /// </summary>
+    private HeadsUpOutsDto? ComputeHeadsUpOuts(
+        List<Player> activePlayers,
+        List<Player> foldedPlayers,
+        List<Card> communityCards,
+        List<Card> muckedCards)
+    {
+        if (activePlayers.Count != 2) return null;
+        if (communityCards.Count is not (3 or 4)) return null;
+
+        var p1 = activePlayers[0];
+        var p2 = activePlayers[1];
+        if (p1.HoleCards.Count != 2 || p2.HoleCards.Count != 2) return null;
+
+        var h1 = handEvaluator.EvaluateBestHand(p1.HoleCards, communityCards);
+        var h2 = handEvaluator.EvaluateBestHand(p2.HoleCards, communityCards);
+        if (h1 is null || h2 is null) return null;
+
+        var cmp = HandEvaluator.CompareHands(h1, h2);
+        if (cmp == 0) return null; // tied - nobody is "behind"
+
+        var behind = cmp < 0 ? p1 : p2;
+        var leader = cmp < 0 ? p2 : p1;
+
+        // Every card that's already accounted for (visible or known-dead) can't be an out.
+        var dead = new HashSet<Card>();
+        foreach (var c in communityCards) dead.Add(c);
+        foreach (var c in p1.HoleCards) dead.Add(c);
+        foreach (var c in p2.HoleCards) dead.Add(c);
+        foreach (var p in foldedPlayers)
+            foreach (var c in p.HoleCards) dead.Add(c);
+        foreach (var c in muckedCards) dead.Add(c);
+
+        var outs = new List<Card>();
+        foreach (Suit suit in Enum.GetValues<Suit>())
+        {
+            foreach (Rank rank in Enum.GetValues<Rank>())
+            {
+                var candidate = new Card(rank, suit);
+                if (dead.Contains(candidate)) continue;
+
+                var nextBoard = new List<Card>(communityCards) { candidate };
+                var behindHand = handEvaluator.EvaluateBestHand(behind.HoleCards, nextBoard);
+                var leaderHand = handEvaluator.EvaluateBestHand(leader.HoleCards, nextBoard);
+                if (behindHand is null || leaderHand is null) continue;
+
+                // An out is a card that makes the behind player strictly beat the leader.
+                if (HandEvaluator.CompareHands(behindHand, leaderHand) > 0)
+                    outs.Add(candidate);
+            }
+        }
+
+        if (outs.Count == 0) return null;
+
+        // Sort high rank first, then by suit for a stable, readable display.
+        outs = outs
+            .OrderByDescending(c => c.Rank)
+            .ThenBy(c => c.Suit)
+            .ToList();
+
+        return new HeadsUpOutsDto
+        {
+            SeatNumber = behind.SeatNumber,
+            PlayerName = behind.Name,
+            Outs = outs
+        };
     }
 
     /// <summary>Simple signaling mechanism to wake up the background loop.</summary>

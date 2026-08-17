@@ -8,9 +8,17 @@ public interface ITableStateManager
     List<Card> CommunityCards { get; }
     IReadOnlyList<Card> MuckedCards { get; }
     Street CurrentStreet { get; }
+
+    /// <summary>Blinds display string, e.g. "2000/4000". Null/empty means no blinds set.</summary>
+    string? Blinds { get; }
+    void SetBlinds(string? blinds);
+
     event Action? StateChanged;
 
     void SetPlayerHoleCards(int seatNumber, List<Card> cards);
+    void SetPlayerName(int seatNumber, string name);
+    IReadOnlyDictionary<int, string> SetPlayerNames(IReadOnlyDictionary<int, string> namesBySeat);
+    void SetPlayerChipCount(int seatNumber, long? chipCount);
     void AddMuckedCards(IEnumerable<Card> cards);
     void RemoveMuckedCards(IEnumerable<Card> cards);
     void FoldPlayer(int seatNumber);
@@ -29,6 +37,24 @@ public class TableStateManager : ITableStateManager
     public List<Card> CommunityCards { get; } = [];
     private readonly List<Card> _muckedCards = [];
     private readonly HashSet<Card> _muckedSet = [];
+
+    private string? _blinds;
+    public string? Blinds
+    {
+        get { lock (_lock) { return _blinds; } }
+    }
+
+    public void SetBlinds(string? blinds)
+    {
+        var normalized = string.IsNullOrWhiteSpace(blinds) ? null : blinds.Trim();
+        lock (_lock)
+        {
+            if (_blinds == normalized) return;
+            _blinds = normalized;
+        }
+        StateChanged?.Invoke();
+    }
+
     public IReadOnlyList<Card> MuckedCards
     {
         get { lock (_lock) { return _muckedCards.ToList(); } }
@@ -109,6 +135,42 @@ public class TableStateManager : ITableStateManager
         {
             var player = Players.FirstOrDefault(p => p.SeatNumber == seatNumber);
             if (player is not null) player.IsFolded = false;
+        }
+        StateChanged?.Invoke();
+    }
+
+    public void SetPlayerName(int seatNumber, string name)
+    {
+        lock (_lock)
+        {
+            var player = GetOrCreatePlayer(seatNumber);
+            player.Name = string.IsNullOrWhiteSpace(name) ? $"Player {seatNumber}" : name.Trim();
+        }
+        StateChanged?.Invoke();
+    }
+
+    public IReadOnlyDictionary<int, string> SetPlayerNames(IReadOnlyDictionary<int, string> namesBySeat)
+    {
+        var applied = new Dictionary<int, string>();
+        lock (_lock)
+        {
+            foreach (var (seat, name) in namesBySeat)
+            {
+                var player = GetOrCreatePlayer(seat);
+                player.Name = string.IsNullOrWhiteSpace(name) ? $"Player {seat}" : name.Trim();
+                applied[seat] = player.Name;
+            }
+        }
+        if (applied.Count > 0) StateChanged?.Invoke();
+        return applied;
+    }
+
+    public void SetPlayerChipCount(int seatNumber, long? chipCount)
+    {
+        lock (_lock)
+        {
+            var player = GetOrCreatePlayer(seatNumber);
+            player.ChipCount = chipCount is null or < 0 ? null : chipCount;
         }
         StateChanged?.Invoke();
     }

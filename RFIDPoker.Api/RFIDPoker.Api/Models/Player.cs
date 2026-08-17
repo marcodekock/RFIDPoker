@@ -12,4 +12,7 @@ public class Player
     /// </summary>
     public HashSet<Card> DealtThisHand { get; set; } = [];
     public bool IsFolded { get; set; }
+
+    /// <summary>Optional chip count. Null means "not tracked" and won't be shown on the UI.</summary>
+    public long? ChipCount { get; set; }
 }

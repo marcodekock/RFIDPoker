@@ -2,6 +2,16 @@ using RFIDPoker.Api.Models;
 
 namespace RFIDPoker.Api.Services;
 
+internal static class RankNaming
+{
+    /// <summary>Returns the plural form of a rank name, e.g. Six -&gt; "Sixes", Ace -&gt; "Aces".</summary>
+    public static string Plural(this Rank rank) => rank switch
+    {
+        Rank.Six => "Sixes",
+        _ => rank + "s"
+    };
+}
+
 public interface IHandEvaluator
 {
     HandResult? EvaluateBestHand(List<Card> holeCards, List<Card> communityCards);
@@ -68,13 +78,13 @@ public class HandEvaluator : IHandEvaluator
             var quadRank = groups[0].Key;
             var kicker = groups[1].First();
             return new HandResult(Models.HandRank.FourOfAKind,
-                $"Four of a Kind, {quadRank}s", structured, [kicker]);
+                $"Four of a Kind, {quadRank.Plural()}", structured, [kicker]);
         }
 
         if (counts is [3, 2])
         {
             return new HandResult(Models.HandRank.FullHouse,
-                $"Full House, {groups[0].Key}s over {groups[1].Key}s", structured, []);
+                $"Full House, {groups[0].Key.Plural()} over {groups[1].Key.Plural()}", structured, []);
         }
 
         if (isFlush)
@@ -96,21 +106,21 @@ public class HandEvaluator : IHandEvaluator
         {
             var kickers = groups.Skip(1).Select(g => g.First()).ToList();
             return new HandResult(Models.HandRank.ThreeOfAKind,
-                $"Three of a Kind, {groups[0].Key}s", structured, kickers);
+                $"Three of a Kind, {groups[0].Key.Plural()}", structured, kickers);
         }
 
         if (counts is [2, 2, 1])
         {
             var kicker = groups[2].First();
             return new HandResult(Models.HandRank.TwoPair,
-                $"Two Pair, {groups[0].Key}s and {groups[1].Key}s", structured, [kicker]);
+                $"Two Pair, {groups[0].Key.Plural()} and {groups[1].Key.Plural()}", structured, [kicker]);
         }
 
         if (counts is [2, 1, 1, 1])
         {
             var kickers = groups.Skip(1).Select(g => g.First()).ToList();
             return new HandResult(Models.HandRank.OnePair,
-                $"Pair of {groups[0].Key}s", structured, kickers);
+                $"Pair of {groups[0].Key.Plural()}", structured, kickers);
         }
 
         var highKickers = sorted.Skip(1).ToList();

@@ -340,10 +340,10 @@ public class RfidReaderService(
 
     private void UpdateCommunityCards()
     {
-        // The flop can be covered by two antennas working in unison. Union their reads
-        // (deduped) so the combined set is the actual community. Turn/River adds on top.
-        var seen = new HashSet<Card>();
-        var communityCards = new List<Card>();
+        // Collect the current set of cards present on any board antenna (flop pair + turn/river).
+        // We iterate antennas and (unordered) tag sets, so we can't derive the visual order
+        // directly from tag storage — we have to preserve the previous board order below.
+        var currentSet = new HashSet<Card>();
 
         foreach (var device in _config.Devices)
         {
@@ -365,9 +365,25 @@ public class RfidReaderService(
                 foreach (var tagId in tags)
                 {
                     var card = cardMapper.GetCard(tagId);
-                    if (card is not null && seen.Add(card)) communityCards.Add(card);
+                    if (card is not null) currentSet.Add(card);
                 }
             }
+        }
+
+        // Rebuild the board preserving the existing order: cards that were already on the
+        // board keep their slot; brand-new cards get appended at the end. This is what
+        // physically happens (flop -> turn -> river) and prevents the river from being
+        // rendered *before* the turn when both share the TurnRiver antenna's hash order.
+        var communityCards = new List<Card>(5);
+        var placed = new HashSet<Card>();
+        foreach (var prev in tableState.CommunityCards)
+        {
+            if (currentSet.Contains(prev) && placed.Add(prev))
+                communityCards.Add(prev);
+        }
+        foreach (var card in currentSet)
+        {
+            if (placed.Add(card)) communityCards.Add(card);
         }
 
         // Auto-detect start of a new hand: board just went from non-empty back to empty
