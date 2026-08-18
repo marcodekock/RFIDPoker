@@ -27,6 +27,7 @@ public record AnalysisResultDto
     public List<PlayerAnalysisDto> FoldedPlayers { get; init; } = [];
     public int ActivePlayerCount { get; init; }
     public HeadsUpOutsDto? HeadsUpOuts { get; init; }
+    public BreakStateDto? Break { get; init; }
     public DateTimeOffset Timestamp { get; init; }
 }
 

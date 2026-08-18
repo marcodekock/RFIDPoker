@@ -10,6 +10,12 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
   imports: [CommonModule],
   template: `
     <div class="display-container" *ngIf="analysis">
+      <div class="break-overlay" *ngIf="analysis.break?.isActive">
+        <div class="break-label">{{ analysis.break?.label || 'BREAK' }}</div>
+        <div class="break-time">{{ breakTimeDisplay() }}</div>
+        <div class="break-sub" *ngIf="analysis.break?.isPaused">PAUSED</div>
+      </div>
+      <ng-container *ngIf="!analysis.break?.isActive">
       <div class="muck-panel" *ngIf="analysis.muckedCards?.length">
         <h3>Muck <span class="muck-count">{{ analysis.muckedCards.length }}</span></h3>
         <div class="muck-cards">
@@ -131,6 +137,7 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
           </div>
         </div>
       </section>
+    </ng-container>
     </div>
 
     <div *ngIf="!analysis" class="waiting">
@@ -139,6 +146,14 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
   `,
   styles: [`
     .display-container { padding: 1rem; position: relative; }
+    .break-overlay {
+      position: fixed; inset: 0; background: rgba(10, 12, 20, 0.92);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 100; gap: 24px;
+    }
+    .break-overlay .break-label { font-size: 3rem; letter-spacing: 12px; color: #b9dceb; text-transform: uppercase; }
+    .break-overlay .break-time { font-size: 12rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #fff; line-height: 1; }
+    .break-overlay .break-sub { font-size: 2rem; letter-spacing: 8px; color: #f0c060; }
     .muck-panel { position: absolute; top: 1rem; right: 1rem; background: #1a1a2e; border: 1px solid #333; border-radius: 6px; padding: 0.5rem 0.75rem; max-width: 320px; z-index: 10; }
     .muck-panel h3 { margin: 0 0 0.4rem 0; font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.4rem; }
     .muck-panel .muck-count { background: #e74c3c; color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 0.7rem; }
@@ -179,22 +194,50 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
 export class DisplayComponent implements OnInit, OnDestroy {
   analysis: AnalysisResult | null = null;
   private sub?: Subscription;
+  private breakTimer?: ReturnType<typeof setInterval>;
+  private localBreakRemaining = 0;
 
   constructor(private analysisService: AnalysisService) {}
 
   ngOnInit(): void {
     this.sub = this.analysisService.analysis$.subscribe(a => {
-      if (a) this.analysis = a;
+      if (a) this.apply(a);
     });
 
     this.analysisService.getCurrentAnalysis().subscribe({
-      next: a => this.analysis = a,
+      next: a => this.apply(a),
       error: () => {}
     });
   }
 
   ngOnDestroy(): void {
     this.sub?.unsubscribe();
+    if (this.breakTimer) clearInterval(this.breakTimer);
+  }
+
+  breakTimeDisplay(): string {
+    const s = Math.max(0, this.localBreakRemaining);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  }
+
+  private apply(a: AnalysisResult): void {
+    this.analysis = a;
+    if (a.break?.isActive) {
+      this.localBreakRemaining = a.break.remainingSeconds;
+      if (!this.breakTimer) {
+        this.breakTimer = setInterval(() => {
+          if (this.analysis?.break?.isActive && !this.analysis.break.isPaused && this.localBreakRemaining > 0) {
+            this.localBreakRemaining--;
+            this.analysis = { ...this.analysis };
+          }
+        }, 1000);
+      }
+    } else {
+      this.localBreakRemaining = 0;
+      if (this.breakTimer) { clearInterval(this.breakTimer); this.breakTimer = undefined; }
+    }
   }
 
   getStreetName(street: number): string {

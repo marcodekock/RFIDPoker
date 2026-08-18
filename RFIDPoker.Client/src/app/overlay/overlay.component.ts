@@ -42,6 +42,15 @@ import {
          [class.pos-center]="position === 'center'"
          [style.--scale]="scale">
 
+      <!-- Break overlay: shown centered when a break is active. Blocks all card panels. -->
+      <div class="break-panel" *ngIf="analysis.break?.isActive">
+        <div class="break-label">{{ analysis.break?.label || 'BREAK' }}</div>
+        <div class="break-time">{{ breakTimeDisplay() }}</div>
+        <div class="break-sub" *ngIf="analysis.break?.isPaused">PAUSED</div>
+      </div>
+
+      <ng-container *ngIf="!analysis.break?.isActive">
+
       <!-- Heads-up outs tab (top-left, only when 2 players remain on flop/turn) -->
       <div class="outs-panel" *ngIf="analysis.headsUpOuts as ho">
         <div class="outs-header">
@@ -136,6 +145,8 @@ import {
           </div>
         </div>
       </div>
+
+      </ng-container>
     </div>
   `,
   styles: [`
@@ -159,6 +170,41 @@ import {
       transform-origin: center bottom;
     }
 
+    /* ---- Break ---- */
+    .break-panel {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      padding: 40px 70px;
+      background: rgba(10, 12, 20, 0.85);
+      border: 2px solid rgba(255, 255, 255, 0.15);
+      border-radius: 18px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    }
+    .break-panel .break-label {
+      font-size: 32px;
+      letter-spacing: 6px;
+      color: #b9dceb;
+      text-transform: uppercase;
+    }
+    .break-panel .break-time {
+      font-size: 120px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #fff;
+      line-height: 1;
+      text-shadow: 0 4px 20px rgba(0, 0, 0, 0.7);
+    }
+    .break-panel .break-sub {
+      font-size: 20px;
+      letter-spacing: 4px;
+      color: #f0c060;
+    }
     /* ---- Board ---- */
     .board-panel {
       position: absolute;
@@ -433,6 +479,8 @@ export class OverlayComponent implements OnInit, OnDestroy {
   scale = 1;
 
   private sub?: Subscription;
+  private breakTimer?: ReturnType<typeof setInterval>;
+  private localBreakRemaining = 0;
 
   // Latched equity per seat. Kept between broadcasts so the interim update
   // (which arrives with 0% equity while the calculator runs) doesn't blank
@@ -481,6 +529,14 @@ export class OverlayComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.sub?.unsubscribe();
+    if (this.breakTimer) clearInterval(this.breakTimer);
+  }
+
+  breakTimeDisplay(): string {
+    const s = Math.max(0, this.localBreakRemaining);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${sec.toString().padStart(2, '0')}`;
   }
 
   private flag(v: string | null, def: boolean): boolean {
@@ -570,6 +626,23 @@ export class OverlayComponent implements OnInit, OnDestroy {
     }
 
     this.analysis = a;
+
+    // Sync break countdown: server sends authoritative remainingSeconds; we tick locally between broadcasts.
+    if (a.break?.isActive) {
+      this.localBreakRemaining = a.break.remainingSeconds;
+      if (!this.breakTimer) {
+        this.breakTimer = setInterval(() => {
+          if (this.analysis?.break?.isActive && !this.analysis.break.isPaused && this.localBreakRemaining > 0) {
+            this.localBreakRemaining--;
+            // Trigger change detection.
+            this.analysis = { ...this.analysis };
+          }
+        }, 1000);
+      }
+    } else {
+      this.localBreakRemaining = 0;
+      if (this.breakTimer) { clearInterval(this.breakTimer); this.breakTimer = undefined; }
+    }
   }
 
   hasEquity(seat: number): boolean {

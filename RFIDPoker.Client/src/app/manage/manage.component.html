@@ -1,0 +1,101 @@
+<div class="manage">
+  <header>
+    <h1>Tournament Management</h1>
+    <nav>
+      <a routerLink="/display">Display</a>
+      <a routerLink="/overlay">Overlay</a>
+      <a routerLink="/config">Config</a>
+    </nav>
+  </header>
+
+  @if (message()) {
+    <div class="flash">{{ message() }}</div>
+  }
+
+  <section class="card">
+    <h2>Break Timer</h2>
+
+    @if (breakState(); as b) {
+      <div class="break-status" [class.paused]="b.isPaused">
+        <div class="break-label">{{ b.label || 'Break' }}</div>
+        <div class="break-time">{{ remainingDisplay() }}</div>
+        <div class="break-state">{{ b.isPaused ? 'PAUSED' : 'RUNNING' }}</div>
+      </div>
+
+      <div class="controls">
+        @if (b.isPaused) {
+          <button (click)="resumeBreak()" class="primary">▶ Resume</button>
+        } @else {
+          <button (click)="pauseBreak()">⏸ Pause</button>
+        }
+        <button (click)="adjustBreak(-60)">-1 min</button>
+        <button (click)="adjustBreak(60)">+1 min</button>
+        <button (click)="adjustBreak(-15)">-15s</button>
+        <button (click)="adjustBreak(15)">+15s</button>
+        <button (click)="stopBreak()" class="danger">■ End Break</button>
+      </div>
+    } @else {
+      <div class="controls">
+        <label>Duration (min):
+          <input type="number" min="1" max="120" [ngModel]="breakDurationMinutes()" (ngModelChange)="breakDurationMinutes.set($event)" />
+        </label>
+        <label>Label:
+          <input type="text" [ngModel]="breakLabel()" (ngModelChange)="breakLabel.set($event)" />
+        </label>
+        <button (click)="startBreak()" class="primary">Start Break</button>
+      </div>
+      <div class="quick">
+        <span>Quick:</span>
+        <button (click)="quickBreak(5)">5 min</button>
+        <button (click)="quickBreak(10)">10 min</button>
+        <button (click)="quickBreak(15)">15 min</button>
+        <button (click)="quickBreak(20)">20 min</button>
+        <button (click)="quickBreak(30)">30 min</button>
+      </div>
+    }
+  </section>
+
+  <section class="card">
+    <h2>Blinds</h2>
+    <div class="controls">
+      <input type="text" placeholder="e.g. 2000/4000" [ngModel]="blinds()" (ngModelChange)="blinds.set($event)" />
+      <button (click)="saveBlinds()" [disabled]="savingBlinds()" class="primary">Save</button>
+      <button (click)="clearBlinds()">Clear</button>
+    </div>
+    <div class="quick">
+      <span>Presets:</span>
+      @for (b of ['25/50', '50/100', '100/200', '200/400', '500/1000', '1000/2000', '2000/4000', '5000/10000']; track b) {
+        <button (click)="blinds.set(b); saveBlinds()">{{ b }}</button>
+      }
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Players</h2>
+    <table class="players">
+      <thead>
+        <tr>
+          <th>Seat</th>
+          <th>Name</th>
+          <th>Chips</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (p of players(); track p.seatNumber) {
+          <tr>
+            <td>{{ p.seatNumber }}</td>
+            <td><input type="text" [(ngModel)]="p.name" /></td>
+            <td><input type="number" min="0" [(ngModel)]="p.chipCount" placeholder="—" /></td>
+            <td><button (click)="savePlayer(p)">Save</button></td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    <div class="controls">
+      <button (click)="savePlayers()" [disabled]="savingPlayers()" class="primary">Save All</button>
+      <button (click)="clearChips()">Clear All Chips</button>
+      <button (click)="newHand()">New Hand</button>
+    </div>
+  </section>
+</div>

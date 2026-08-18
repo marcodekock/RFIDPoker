@@ -26,6 +26,7 @@ export interface AnalysisResult {
   foldedPlayers: PlayerAnalysis[];
   activePlayerCount: number;
   headsUpOuts?: HeadsUpOuts | null;
+  break?: BreakState | null;
   timestamp: string;
 }
 
@@ -33,6 +34,15 @@ export interface HeadsUpOuts {
   seatNumber: number;
   playerName: string;
   outs: Card[];
+}
+
+export interface BreakState {
+  isActive: boolean;
+  isPaused: boolean;
+  label?: string | null;
+  totalSeconds: number;
+  remainingSeconds: number;
+  serverNowUtc: string;
 }
 
 export interface CardMapping {

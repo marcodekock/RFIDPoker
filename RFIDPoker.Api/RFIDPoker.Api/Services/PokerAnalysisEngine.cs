@@ -13,6 +13,7 @@ public interface IPokerAnalysisEngine
 
 public class PokerAnalysisEngine(
     ITableStateManager tableState,
+    ITournamentStateManager tournamentState,
     IHandEvaluator handEvaluator,
     IEquityCalculator equityCalculator,
     IHubContext<AnalysisHub> hubContext,
@@ -29,12 +30,14 @@ public class PokerAnalysisEngine(
     public override Task StartAsync(CancellationToken cancellationToken)
     {
         tableState.StateChanged += OnStateChanged;
+        tournamentState.StateChanged += OnStateChanged;
         return base.StartAsync(cancellationToken);
     }
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {
         tableState.StateChanged -= OnStateChanged;
+        tournamentState.StateChanged -= OnStateChanged;
         return base.StopAsync(cancellationToken);
     }
 
@@ -95,6 +98,38 @@ public class PokerAnalysisEngine(
 
     private async Task RunAnalysisAsync(CancellationToken ct)
     {
+        // While on break, freeze the table: publish an empty snapshot with the break
+        // state so overlay/display hide cards and show the countdown.
+        if (tournamentState.IsOnBreak)
+        {
+            var breakSnap = tournamentState.GetBreakSnapshot();
+            var breakResult = new AnalysisResultDto
+            {
+                CurrentStreet = tableState.CurrentStreet,
+                Blinds = tableState.Blinds,
+                CommunityCards = [],
+                MuckedCards = [],
+                ActivePlayers = tableState.Players
+                    .OrderBy(p => p.SeatNumber)
+                    .Select(p => new PlayerAnalysisDto
+                    {
+                        SeatNumber = p.SeatNumber,
+                        PlayerName = p.Name,
+                        ChipCount = p.ChipCount,
+                        HoleCards = [],
+                        IsFolded = false
+                    }).ToList(),
+                FoldedPlayers = [],
+                ActivePlayerCount = 0,
+                HeadsUpOuts = null,
+                Break = breakSnap,
+                Timestamp = DateTimeOffset.UtcNow
+            };
+            _latestResult = breakResult;
+            await hubContext.Clients.All.SendAsync("AnalysisUpdated", breakResult, ct);
+            return;
+        }
+
         // Only seats that currently hold cards are "in the hand". Seats that were seen
         // in a previous hand but weren't dealt in this time (player sat out / knocked out)
         // must be ignored so equity still computes for the remaining players.
@@ -163,6 +198,7 @@ public class PokerAnalysisEngine(
             FoldedPlayers = foldedAnalyses,
             ActivePlayerCount = activePlayers.Count,
             HeadsUpOuts = headsUpOuts,
+            Break = tournamentState.GetBreakSnapshot(),
             Timestamp = DateTimeOffset.UtcNow
         };
         _latestResult = interim;
@@ -205,6 +241,7 @@ public class PokerAnalysisEngine(
             FoldedPlayers = foldedAnalyses,
             ActivePlayerCount = activePlayers.Count,
             HeadsUpOuts = headsUpOuts,
+            Break = tournamentState.GetBreakSnapshot(),
             Timestamp = DateTimeOffset.UtcNow
         };
 
