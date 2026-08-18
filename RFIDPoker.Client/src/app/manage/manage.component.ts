@@ -5,6 +5,7 @@ import { RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { Subscription, interval } from 'rxjs';
 import { AnalysisService } from '../services/analysis.service';
+import { AuthService } from '../services/auth.service';
 import { BreakState } from '../models';
 
 interface PlayerRow {
@@ -41,7 +42,7 @@ export class ManageComponent implements OnInit, OnDestroy {
     return `${m}:${sec.toString().padStart(2, '0')}`;
   });
 
-  constructor(private http: HttpClient, private analysis: AnalysisService) {}
+  constructor(private http: HttpClient, private analysis: AnalysisService, private auth: AuthService) {}
 
   ngOnInit(): void {
     this.loadPlayers();
@@ -198,4 +199,6 @@ export class ManageComponent implements OnInit, OnDestroy {
   }
 
   trackBySeat = (_: number, p: PlayerRow) => p.seatNumber;
+
+  logout() { this.auth.logout(); }
 }

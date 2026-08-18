@@ -37,7 +37,7 @@ public class CardTagMapper : ICardTagMapper
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        db.Database.EnsureCreated();
+        // Database is created/migrated at startup (Program.cs); no EnsureCreated here.
 
         SeedFromConfiguration(db, configuration);
 

@@ -17,6 +17,12 @@ public class EmulatorConfig
     /// <summary>If true, POSTs a mapping for every card in the deck at startup.</summary>
     public bool SeedMappingsOnStartup { get; set; } = true;
 
+    /// <summary>Username used to obtain a JWT from the API before seeding mappings.</summary>
+    public string? ApiUsername { get; set; }
+
+    /// <summary>Password used to obtain a JWT from the API before seeding mappings.</summary>
+    public string? ApiPassword { get; set; }
+
     /// <summary>Prefix for synthesized tag ids (e.g. "EMU-AS" for Ace of Spades).</summary>
     public string TagPrefix { get; set; } = "EMU-";
 

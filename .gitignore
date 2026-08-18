@@ -40,6 +40,12 @@ bld/
 RFIDPoker.Api/RFIDPoker.Api/wwwroot/*
 !RFIDPoker.Api/RFIDPoker.Api/wwwroot/.gitkeep
 
+# Customer runtime data — never commit
+Data/
+*.db
+*.db-shm
+*.db-wal
+
 # Visual Studio 2017 auto generated files
 Generated\ Files/
 

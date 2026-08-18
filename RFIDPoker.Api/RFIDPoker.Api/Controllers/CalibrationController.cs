@@ -1,5 +1,7 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using RFIDPoker.Api.Auth;
 using RFIDPoker.Api.Dtos;
 using RFIDPoker.Api.Models;
 using RFIDPoker.Api.Services;
@@ -8,6 +10,7 @@ namespace RFIDPoker.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize(Policy = AuthPolicies.RequireUser)]
 public class CalibrationController(
     ICardTagMapper cardMapper,
     IOptions<RfidConfig> rfidConfig,

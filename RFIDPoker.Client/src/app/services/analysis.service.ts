@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { BehaviorSubject, Observable } from 'rxjs';
 import * as signalR from '@microsoft/signalr';
 import { AnalysisResult } from '../models';
+import { AuthService } from './auth.service';
 
 @Injectable({ providedIn: 'root' })
 export class AnalysisService implements OnDestroy {
@@ -12,9 +13,9 @@ export class AnalysisService implements OnDestroy {
 
   analysis$ = this.analysisSubject.asObservable();
 
-  constructor(private http: HttpClient, private zone: NgZone) {
+  constructor(private http: HttpClient, private zone: NgZone, private auth: AuthService) {
     this.hubConnection = new signalR.HubConnectionBuilder()
-      .withUrl('/hubs/analysis')
+      .withUrl('/hubs/analysis', { accessTokenFactory: () => this.resolveToken() })
       .withAutomaticReconnect({
         nextRetryDelayInMilliseconds: ctx => Math.min(30000, 1000 * Math.pow(2, Math.min(ctx.previousRetryCount, 5)))
       })
@@ -48,6 +49,16 @@ export class AnalysisService implements OnDestroy {
 
   getCurrentAnalysis(): Observable<AnalysisResult> {
     return this.http.get<AnalysisResult>('/api/analysis/current');
+  }
+
+  private resolveToken(): string {
+    const user = this.auth.token();
+    if (user) return user;
+    // Overlay page authenticates via ?token= in the URL.
+    try {
+      const qp = new URLSearchParams(window.location.search);
+      return qp.get('token') ?? qp.get('access_token') ?? '';
+    } catch { return ''; }
   }
 
   ngOnDestroy(): void {

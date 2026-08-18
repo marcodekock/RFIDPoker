@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { BehaviorSubject, Observable } from 'rxjs';
 import * as signalR from '@microsoft/signalr';
 import { AntennaReading, CardMapping } from '../models';
+import { AuthService } from './auth.service';
 
 @Injectable({ providedIn: 'root' })
 export class CalibrationService implements OnDestroy {
@@ -13,9 +14,9 @@ export class CalibrationService implements OnDestroy {
   /// Live per-antenna readings pushed from the API over SignalR.
   readings$ = this.readingsSubject.asObservable();
 
-  constructor(private http: HttpClient, private zone: NgZone) {
+  constructor(private http: HttpClient, private zone: NgZone, private auth: AuthService) {
     this.hubConnection = new signalR.HubConnectionBuilder()
-      .withUrl('/hubs/analysis')
+      .withUrl('/hubs/analysis', { accessTokenFactory: () => this.resolveToken() })
       .withAutomaticReconnect({
         nextRetryDelayInMilliseconds: ctx => Math.min(30000, 1000 * Math.pow(2, Math.min(ctx.previousRetryCount, 5)))
       })
@@ -67,6 +68,15 @@ export class CalibrationService implements OnDestroy {
 
   deleteMapping(tagId: string): Observable<void> {
     return this.http.delete<void>(`/api/calibration/mappings/${tagId}`);
+  }
+
+  private resolveToken(): string {
+    const user = this.auth.token();
+    if (user) return user;
+    try {
+      const qp = new URLSearchParams(window.location.search);
+      return qp.get('token') ?? qp.get('access_token') ?? '';
+    } catch { return ''; }
   }
 
   ngOnDestroy(): void {

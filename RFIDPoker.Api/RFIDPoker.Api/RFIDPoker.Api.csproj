@@ -8,9 +8,24 @@
 
   <ItemGroup>
     <PackageReference Include="HoldemPoker.Evaluator" Version="1.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.2.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Never publish runtime customer data. Data/ lives outside the app folder anyway. -->
+    <Content Remove="Data\**" />
+    <None Remove="Data\**" />
+    <Content Remove="**\*.db" />
+    <Content Remove="**\*.db-shm" />
+    <Content Remove="**\*.db-wal" />
   </ItemGroup>
 
 </Project>
