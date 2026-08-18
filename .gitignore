@@ -41,7 +41,7 @@ RFIDPoker.Api/RFIDPoker.Api/wwwroot/*
 !RFIDPoker.Api/RFIDPoker.Api/wwwroot/.gitkeep
 
 # Customer runtime data — never commit
-Data/
+/Data/
 *.db
 *.db-shm
 *.db-wal
