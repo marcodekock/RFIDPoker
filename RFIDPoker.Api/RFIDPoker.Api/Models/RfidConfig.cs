@@ -38,6 +38,14 @@ public class RfidConfig
     /// </summary>
     public int IdleHandResetMs { get; set; } = 5000;
 
+    /// <summary>
+    /// If a seat that was dealt in loses its cards from the seat antenna for this many
+    /// milliseconds, the player is auto-folded and their preserved hole cards are moved
+    /// to the muck. Covers the case where a player picks up their cards or the dealer
+    /// forgets to muck.
+    /// </summary>
+    public int MissingCardsFoldMs { get; set; } = 10000;
+
     public List<DeviceConfig> Devices { get; set; } = [];
 }
 

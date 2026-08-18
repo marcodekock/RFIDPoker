@@ -113,6 +113,24 @@ public class TableStateManager : ITableStateManager
             // still show up in the folded list even after the physical cards leave
             // the seat antenna (e.g. slid into the muck).
             if (player.IsFolded && cards.Count == 0) return;
+
+            if (cards.Count == 0)
+            {
+                // Cards physically left the seat but this player was dealt in - could be
+                // a stray flicker or the player picking their cards up. Preserve the last
+                // known hole cards and start a grace-period timer; the auto-fold service
+                // decides whether to fold + muck them.
+                if (player.HoleCards.Count > 0 || player.DealtThisHand.Count > 0)
+                {
+                    player.CardsMissingSince ??= DateTimeOffset.UtcNow;
+                    return;
+                }
+                // Never dealt in this hand - nothing to preserve.
+                player.HoleCards = cards;
+                return;
+            }
+
+            player.CardsMissingSince = null;
             player.HoleCards = cards;
             foreach (var c in cards) player.DealtThisHand.Add(c);
         }
@@ -124,7 +142,11 @@ public class TableStateManager : ITableStateManager
         lock (_lock)
         {
             var player = Players.FirstOrDefault(p => p.SeatNumber == seatNumber);
-            if (player is not null) player.IsFolded = true;
+            if (player is not null)
+            {
+                player.IsFolded = true;
+                player.CardsMissingSince = null;
+            }
         }
         StateChanged?.Invoke();
     }
@@ -134,7 +156,11 @@ public class TableStateManager : ITableStateManager
         lock (_lock)
         {
             var player = Players.FirstOrDefault(p => p.SeatNumber == seatNumber);
-            if (player is not null) player.IsFolded = false;
+            if (player is not null)
+            {
+                player.IsFolded = false;
+                player.CardsMissingSince = null;
+            }
         }
         StateChanged?.Invoke();
     }
@@ -197,6 +223,7 @@ public class TableStateManager : ITableStateManager
                 p.HoleCards.Clear();
                 p.DealtThisHand.Clear();
                 p.IsFolded = false;
+                p.CardsMissingSince = null;
             }
         }
         StateChanged?.Invoke();

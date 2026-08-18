@@ -13,6 +13,12 @@ public class Player
     public HashSet<Card> DealtThisHand { get; set; } = [];
     public bool IsFolded { get; set; }
 
+    /// <summary>
+    /// When non-null, the seat currently has no live tags but still holds preserved hole
+    /// cards pending an auto-fold decision. Cleared when cards reappear or on fold/new hand.
+    /// </summary>
+    public DateTimeOffset? CardsMissingSince { get; set; }
+
     /// <summary>Optional chip count. Null means "not tracked" and won't be shown on the UI.</summary>
     public long? ChipCount { get; set; }
 }

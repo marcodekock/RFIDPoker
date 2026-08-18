@@ -195,6 +195,7 @@ builder.Services.AddSingleton<RfidReaderService>();
 builder.Services.AddSingleton<IRfidReaderService>(sp => sp.GetRequiredService<RfidReaderService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RfidReaderService>());
 builder.Services.AddHostedService<IdleHandResetService>();
+builder.Services.AddHostedService<MissingCardsAutoFoldService>();
 
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IOverlayTokenService, OverlayTokenService>();
