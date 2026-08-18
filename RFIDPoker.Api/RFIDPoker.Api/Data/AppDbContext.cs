@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using RFIDPoker.Api.Auth;
 using RFIDPoker.Api.Models;
 
 namespace RFIDPoker.Api.Data;
