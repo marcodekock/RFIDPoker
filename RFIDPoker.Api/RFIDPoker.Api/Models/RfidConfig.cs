@@ -46,6 +46,19 @@ public class RfidConfig
     /// </summary>
     public int MissingCardsFoldMs { get; set; } = 10000;
 
+    /// <summary>
+    /// How long (ms) a stable set of cards (both hole cards, or 3/4/5 community cards)
+    /// must be continuously present before they are "latched" — i.e. preserved on the
+    /// board/HUD across brief RFID reader drops so equity and hand display don't flicker.
+    /// </summary>
+    public int CardLatchOnMs { get; set; } = 2000;
+
+    /// <summary>
+    /// How long (ms) latched cards must be continuously absent from the antenna before
+    /// the latch is released. Muck events release seat latches immediately.
+    /// </summary>
+    public int CardLatchOffMs { get; set; } = 10000;
+
     public List<DeviceConfig> Devices { get; set; } = [];
 }
 

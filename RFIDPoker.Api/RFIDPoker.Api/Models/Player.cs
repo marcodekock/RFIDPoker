@@ -19,6 +19,20 @@ public class Player
     /// </summary>
     public DateTimeOffset? CardsMissingSince { get; set; }
 
+    /// <summary>
+    /// Sticky snapshot of both hole cards once the seat has held them continuously for
+    /// the configured latch-on window. While set, brief partial reads (1 card, or 0 cards)
+    /// don't disturb the displayed hole cards; the latch is released on muck/fold or after
+    /// the configured absence window (handled by <see cref="MissingCardsAutoFoldService"/>).
+    /// </summary>
+    public List<Card>? LatchedHoleCards { get; set; }
+
+    /// <summary>
+    /// When the seat first started showing a stable 2-card pair matching the current
+    /// (or pending) latch candidate. Used to gate the 2-second latch-on window.
+    /// </summary>
+    public DateTimeOffset? HoleCardsStableSince { get; set; }
+
     /// <summary>Optional chip count. Null means "not tracked" and won't be shown on the UI.</summary>
     public long? ChipCount { get; set; }
 }

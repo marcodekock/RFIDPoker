@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using RFIDPoker.Api.Models;
 
 namespace RFIDPoker.Api.Services;
@@ -14,6 +15,13 @@ public interface ITableStateManager
     void SetBlinds(string? blinds);
 
     event Action? StateChanged;
+
+    /// <summary>
+    /// Fired whenever <see cref="NewHand"/> resets the table. Consumers (e.g. the RFID
+    /// reader's community-card latch) should treat this as an authoritative "wipe" signal
+    /// so stale latch state can't resurrect the previous hand on the next eviction tick.
+    /// </summary>
+    event Action? HandReset;
 
     void SetPlayerHoleCards(int seatNumber, List<Card> cards);
     void SetPlayerName(int seatNumber, string name);
@@ -32,6 +40,12 @@ public interface ITableStateManager
 public class TableStateManager : ITableStateManager
 {
     private readonly Lock _lock = new();
+    private readonly TimeSpan _latchOn;
+
+    public TableStateManager(IOptions<RfidConfig> rfidOptions)
+    {
+        _latchOn = TimeSpan.FromMilliseconds(Math.Max(0, rfidOptions.Value.CardLatchOnMs));
+    }
 
     public List<Player> Players { get; } = [];
     public List<Card> CommunityCards { get; } = [];
@@ -103,6 +117,7 @@ public class TableStateManager : ITableStateManager
     };
 
     public event Action? StateChanged;
+    public event Action? HandReset;
 
     public void SetPlayerHoleCards(int seatNumber, List<Card> cards)
     {
@@ -114,25 +129,94 @@ public class TableStateManager : ITableStateManager
             // the seat antenna (e.g. slid into the muck).
             if (player.IsFolded && cards.Count == 0) return;
 
-            if (cards.Count == 0)
+            // Latch semantics: once both hole cards have been continuously present for
+            // the configured latch-on window, snapshot them so a brief 1-card / 0-card
+            // reader drop doesn't wipe the HUD or churn equity. The latch is released
+            // by fold/muck (FoldPlayer / NewHand) or by the missing-cards auto-fold
+            // after CardLatchOffMs (== MissingCardsFoldMs) of continuous absence.
+            var now = DateTimeOffset.UtcNow;
+
+            if (cards.Count == 2)
             {
-                // Cards physically left the seat but this player was dealt in - could be
-                // a stray flicker or the player picking their cards up. Preserve the last
-                // known hole cards and start a grace-period timer; the auto-fold service
-                // decides whether to fold + muck them.
+                var matchesLatch = player.LatchedHoleCards is { Count: 2 } latched
+                    && cards.All(latched.Contains);
+
+                if (player.LatchedHoleCards is null || !matchesLatch)
+                {
+                    // Same 2-card set holding steady? Start / continue the latch-on timer.
+                    var samePending = player.HoleCards.Count == 2
+                        && cards.All(player.HoleCards.Contains);
+                    if (samePending)
+                    {
+                        player.HoleCardsStableSince ??= now;
+                        if (player.LatchedHoleCards is null
+                            && now - player.HoleCardsStableSince.Value >= _latchOn)
+                        {
+                            player.LatchedHoleCards = cards.ToList();
+                        }
+                        else if (player.LatchedHoleCards is not null && !matchesLatch)
+                        {
+                            // Different pair now stable — swap the latch.
+                            player.LatchedHoleCards = cards.ToList();
+                        }
+                    }
+                    else
+                    {
+                        player.HoleCardsStableSince = now;
+                        if (player.LatchedHoleCards is not null && !matchesLatch)
+                        {
+                            // Genuinely different pair on the seat — treat as new hand for this seat.
+                            player.LatchedHoleCards = null;
+                        }
+                    }
+                }
+
+                player.CardsMissingSince = null;
+                player.HoleCards = cards;
+                foreach (var c in cards) player.DealtThisHand.Add(c);
+            }
+            else if (cards.Count == 1)
+            {
+                // Partial read. If we have a latched pair that includes this card,
+                // treat as a flicker and keep the latched pair on display.
+                if (player.LatchedHoleCards is { Count: 2 } latched
+                    && latched.Contains(cards[0]))
+                {
+                    player.CardsMissingSince = null;
+                    player.HoleCards = latched.ToList();
+                    foreach (var c in cards) player.DealtThisHand.Add(c);
+                }
+                else
+                {
+                    // No latch (or the single card doesn't belong to it): fall back
+                    // to legacy behavior — reset stability timer and reflect raw state.
+                    player.HoleCardsStableSince = null;
+                    player.CardsMissingSince = null;
+                    player.HoleCards = cards;
+                    foreach (var c in cards) player.DealtThisHand.Add(c);
+                }
+            }
+            else // cards.Count == 0
+            {
+                // Cards physically left the seat. If latched, keep displaying the latched
+                // pair; the auto-fold service will release the latch after CardLatchOffMs.
+                if (player.LatchedHoleCards is { Count: 2 } latched)
+                {
+                    player.CardsMissingSince ??= now;
+                    player.HoleCards = latched.ToList();
+                    return;
+                }
                 if (player.HoleCards.Count > 0 || player.DealtThisHand.Count > 0)
                 {
-                    player.CardsMissingSince ??= DateTimeOffset.UtcNow;
+                    // Un-latched flicker path: preserve last known, arm the grace timer.
+                    player.CardsMissingSince ??= now;
                     return;
                 }
                 // Never dealt in this hand - nothing to preserve.
+                player.HoleCardsStableSince = null;
                 player.HoleCards = cards;
                 return;
             }
-
-            player.CardsMissingSince = null;
-            player.HoleCards = cards;
-            foreach (var c in cards) player.DealtThisHand.Add(c);
         }
         StateChanged?.Invoke();
     }
@@ -146,6 +230,8 @@ public class TableStateManager : ITableStateManager
             {
                 player.IsFolded = true;
                 player.CardsMissingSince = null;
+                player.LatchedHoleCards = null;
+                player.HoleCardsStableSince = null;
             }
         }
         StateChanged?.Invoke();
@@ -224,8 +310,11 @@ public class TableStateManager : ITableStateManager
                 p.DealtThisHand.Clear();
                 p.IsFolded = false;
                 p.CardsMissingSince = null;
+                p.LatchedHoleCards = null;
+                p.HoleCardsStableSince = null;
             }
         }
+        HandReset?.Invoke();
         StateChanged?.Invoke();
     }
 

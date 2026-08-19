@@ -38,6 +38,16 @@ public class RfidReaderService(
     private readonly Dictionary<string, HashSet<string>> _lastNotifiedTags =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Community-card latch: once a stable set of >= 3 cards has been continuously
+    // present for CardLatchOnMs it's "locked in" and preserved across brief RFID
+    // reader drops. Released only when every latched card has been absent for
+    // CardLatchOffMs (or the hand is reset via NewHand).
+    private readonly Lock _communityLatchLock = new();
+    private List<Card> _latchedCommunity = [];
+    private HashSet<Card> _lastCommunitySnapshot = [];
+    private DateTimeOffset? _communityStableSince;
+    private DateTimeOffset? _communityAbsentSince;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -81,6 +91,12 @@ public class RfidReaderService(
             logger.LogWarning("Rfid:Devices is empty. Reader service will not connect to anything.");
             return;
         }
+
+        // Wipe latch state whenever the table resets, otherwise a still-populated latch
+        // would immediately re-inject the previous hand's board on the next eviction tick.
+        Action onHandReset = ResetCommunityLatch;
+        tableState.HandReset += onHandReset;
+        stoppingToken.Register(() => tableState.HandReset -= onHandReset);
 
         var evictionTask = Task.Run(() => EvictionLoopAsync(stoppingToken), stoppingToken);
 
@@ -323,6 +339,28 @@ public class RfidReaderService(
                         tableState.RemoveMuckedCards(wasMucked);
                         tableState.UnfoldPlayer(antenna.SeatNumber.Value);
                     }
+
+                    // A brand-new card (not previously mucked, not part of this seat's
+                    // dealt-this-hand history) that lands while the table is still holding
+                    // stale end-of-hand state (folded seats or a lingering muck pile) means
+                    // a new hand has physically started — reset before recording it so the
+                    // fresh cards don't get filed against the previous hand's state.
+                    var seat = tableState.Players.FirstOrDefault(p => p.SeatNumber == antenna.SeatNumber.Value);
+                    var freshCards = cards
+                        .Where(c => !tableState.MuckedCards.Contains(c)
+                                    && (seat is null || !seat.DealtThisHand.Contains(c)))
+                        .ToList();
+                    var handIsStale = tableState.MuckedCards.Count > 0
+                        || tableState.Players.Any(p => p.IsFolded);
+                    if (freshCards.Count > 0 && handIsStale)
+                    {
+                        logger.LogInformation(
+                            "Fresh card {Card} on seat {Seat} while previous hand still holds stale state (mucked={Muck}, foldedSeats={Folded}); starting new hand.",
+                            freshCards[0], antenna.SeatNumber.Value,
+                            tableState.MuckedCards.Count,
+                            tableState.Players.Count(p => p.IsFolded));
+                        tableState.NewHand();
+                    }
                 }
                 tableState.SetPlayerHoleCards(antenna.SeatNumber.Value, cards);
                 break;
@@ -386,9 +424,18 @@ public class RfidReaderService(
             if (placed.Add(card)) communityCards.Add(card);
         }
 
+        // Latch: prevent the board from shrinking (and equity from re-churning) when a
+        // reader briefly loses a tag. Once >= 3 board cards have been continuously
+        // present for CardLatchOnMs, snapshot them; while latched, always merge the
+        // latched set back into the broadcast output. Release the latch when every
+        // latched card has been absent for CardLatchOffMs.
+        ApplyCommunityLatch(currentSet, communityCards);
+
         // Auto-detect start of a new hand: board just went from non-empty back to empty
         // AND no unfolded player is currently holding cards. Folded players keep their
-        // hole cards for display but must not block the reset.
+        // hole cards for display but must not block the reset. The latch is respected —
+        // if it hasn't released yet, communityCards will still contain the latched cards
+        // and this branch won't fire.
         var hadBoard = tableState.CommunityCards.Count > 0;
         var anyHoleCards = tableState.Players.Any(p => !p.IsFolded && p.HoleCards.Count > 0);
         if (hadBoard && communityCards.Count == 0 && !anyHoleCards)
@@ -401,10 +448,112 @@ public class RfidReaderService(
         }
     }
 
+    private void ApplyCommunityLatch(HashSet<Card> currentSet, List<Card> communityCards)
+    {
+        var latchOn = TimeSpan.FromMilliseconds(Math.Max(0, _config.CardLatchOnMs));
+        var latchOff = TimeSpan.FromMilliseconds(Math.Max(0, _config.CardLatchOffMs));
+        var now = DateTimeOffset.UtcNow;
+
+        lock (_communityLatchLock)
+        {
+            // Stability tracker: same non-trivial set seen continuously => arm latch.
+            var sameAsLast = currentSet.SetEquals(_lastCommunitySnapshot);
+            if (!sameAsLast)
+            {
+                _lastCommunitySnapshot = new HashSet<Card>(currentSet);
+                _communityStableSince = currentSet.Count >= 3 ? now : null;
+            }
+            else if (currentSet.Count >= 3)
+            {
+                _communityStableSince ??= now;
+            }
+            else
+            {
+                _communityStableSince = null;
+            }
+
+            if (_communityStableSince.HasValue
+                && currentSet.Count >= 3
+                && now - _communityStableSince.Value >= latchOn)
+            {
+                // Grow the latch to whatever's currently stable — a stable turn card
+                // stacks on top of a previously latched flop, etc.
+                foreach (var c in communityCards)
+                {
+                    if (!_latchedCommunity.Contains(c)) _latchedCommunity.Add(c);
+                }
+            }
+
+            if (_latchedCommunity.Count == 0) return;
+
+            // Absence tracking: as long as *any* latched card is still on the board,
+            // the latch is considered present. Only sustained full absence releases it.
+            var anyLatchedPresent = _latchedCommunity.Any(currentSet.Contains);
+            if (anyLatchedPresent)
+            {
+                _communityAbsentSince = null;
+            }
+            else
+            {
+                _communityAbsentSince ??= now;
+                if (now - _communityAbsentSince.Value >= latchOff)
+                {
+                    _latchedCommunity.Clear();
+                    _communityAbsentSince = null;
+                    _communityStableSince = null;
+                    return;
+                }
+            }
+
+            // Merge latched cards back into the output, preserving original order:
+            // start with the latched sequence, then append any additional live cards.
+            var merged = new List<Card>(5);
+            var seen = new HashSet<Card>();
+            foreach (var c in _latchedCommunity)
+            {
+                if (seen.Add(c)) merged.Add(c);
+            }
+            foreach (var c in communityCards)
+            {
+                if (seen.Add(c)) merged.Add(c);
+            }
+            communityCards.Clear();
+            communityCards.AddRange(merged);
+        }
+    }
+
+    private void ResetCommunityLatch()
+    {
+        lock (_communityLatchLock)
+        {
+            _latchedCommunity.Clear();
+            _lastCommunitySnapshot.Clear();
+            _communityStableSince = null;
+            _communityAbsentSince = null;
+        }
+    }
+
     private void ProcessMuck(List<Card> muckedCards)
     {
         if (muckedCards.Count > 0)
             tableState.AddMuckedCards(muckedCards);
+
+        // Mucked cards are authoritatively off the board — release them from the
+        // community latch immediately so end-of-hand cleanup doesn't have to wait
+        // for the CardLatchOffMs absence window.
+        if (muckedCards.Count > 0)
+        {
+            lock (_communityLatchLock)
+            {
+                foreach (var c in muckedCards) _latchedCommunity.Remove(c);
+                if (_latchedCommunity.Count == 0)
+                {
+                    _communityAbsentSince = null;
+                    _communityStableSince = null;
+                    _lastCommunitySnapshot.Clear();
+                }
+            }
+        }
 
         foreach (var player in tableState.Players)
         {
