@@ -28,7 +28,6 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
       </div>
 
       <header>
-        <h1>RFID Poker</h1>
         <span class="street-badge">{{ getStreetName(analysis.currentStreet) }}</span>
         <span class="blinds-badge" *ngIf="analysis.blinds">Blinds {{ analysis.blinds }}</span>
         <span class="player-count">{{ analysis.activePlayerCount }} players</span>

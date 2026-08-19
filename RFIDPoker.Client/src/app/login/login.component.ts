@@ -66,7 +66,7 @@ export class LoginComponent implements OnInit {
     this.auth.login(this.username, this.password).subscribe({
       next: () => {
         this.loading.set(false);
-        const returnUrl = this.route.snapshot.queryParamMap.get('returnUrl') || '/display';
+        const returnUrl = this.route.snapshot.queryParamMap.get('returnUrl') || '/manage';
         this.router.navigateByUrl(returnUrl);
       },
       error: e => {

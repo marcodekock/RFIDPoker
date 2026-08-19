@@ -495,6 +495,9 @@ export class OverlayComponent implements OnInit, OnDestroy {
 
   private static readonly FOLD_FADE_MS = 2500;
 
+  private prevHtmlBackground: string | null = null;
+  private prevBodyBackground: string | null = null;
+
   constructor(
     private analysisService: AnalysisService,
     private route: ActivatedRoute
@@ -502,6 +505,10 @@ export class OverlayComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     // Force page-level transparency so OBS can composite the camera feed.
+    // Save prior values so we can restore them on destroy (otherwise navigating
+    // back to Manage/Display leaves the whole page blank/white).
+    this.prevHtmlBackground = document.documentElement.style.background;
+    this.prevBodyBackground = document.body.style.background;
     document.documentElement.style.background = 'transparent';
     document.body.style.background = 'transparent';
 
@@ -530,6 +537,9 @@ export class OverlayComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.sub?.unsubscribe();
     if (this.breakTimer) clearInterval(this.breakTimer);
+    // Restore page background so other routes render normally.
+    document.documentElement.style.background = this.prevHtmlBackground ?? '';
+    document.body.style.background = this.prevBodyBackground ?? '';
   }
 
   breakTimeDisplay(): string {

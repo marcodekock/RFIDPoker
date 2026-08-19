@@ -10,7 +10,7 @@ import { OverlayTokenComponent } from './admin/overlay-token.component';
 import { authGuard, adminGuard } from './services/auth.guards';
 
 export const routes: Routes = [
-  { path: '', redirectTo: 'display', pathMatch: 'full' },
+  { path: '', redirectTo: 'manage', pathMatch: 'full' },
   { path: 'login', component: LoginComponent },
   { path: 'setup', component: SetupComponent },
   // Overlay authenticates via ?token=, not the user session — must remain reachable

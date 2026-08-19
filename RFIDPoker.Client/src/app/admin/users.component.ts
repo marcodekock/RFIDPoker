@@ -19,14 +19,7 @@ interface UserRow {
   imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="page">
-      <header>
-        <h1>User Accounts</h1>
-        <nav>
-          <a routerLink="/manage">Manage</a>
-          <a routerLink="/admin/overlay-token">Overlay Token</a>
-          <a (click)="logout()" style="cursor: pointer">Sign out</a>
-        </nav>
-      </header>
+      <h1>User Accounts</h1>
 
       <section class="card">
         <h2>Create User</h2>

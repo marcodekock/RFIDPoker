@@ -9,9 +9,11 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const router = inject(Router);
   const token = auth.token();
 
-  // Never attach the user JWT to overlay endpoints or the overlay page's hub connection;
-  // those authenticate via the ?token= overlay JWT explicitly.
-  const isOverlayApi = req.url.startsWith('/api/overlay')
+  // Never attach the user JWT to the read-only overlay data endpoints or the overlay
+  // page's hub connection; those authenticate via the ?token= overlay JWT explicitly.
+  // NOTE: /api/overlay-token/** is the admin management endpoint and DOES require the
+  // user JWT — it must NOT be treated as an overlay endpoint.
+  const isOverlayApi = (req.url.startsWith('/api/overlay/') || req.url === '/api/overlay')
                     || req.url.includes('access_token=')
                     || req.url.includes('token=');
 

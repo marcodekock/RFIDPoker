@@ -18,13 +18,7 @@ interface OverlayStatus {
   imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="page">
-      <header>
-        <h1>Overlay Authentication</h1>
-        <nav>
-          <a routerLink="/manage">Manage</a>
-          <a routerLink="/admin/users">Users</a>
-        </nav>
-      </header>
+      <h1>Overlay Authentication</h1>
 
       <section class="card">
         <h2>Status</h2>

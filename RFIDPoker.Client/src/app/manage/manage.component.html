@@ -1,16 +1,4 @@
 <div class="manage">
-  <header>
-    <h1>Tournament Management</h1>
-    <nav>
-      <a routerLink="/display">Display</a>
-      <a routerLink="/overlay">Overlay</a>
-      <a routerLink="/config">Config</a>
-      <a routerLink="/admin/users">Users</a>
-      <a routerLink="/admin/overlay-token">Overlay Token</a>
-      <a (click)="logout()" style="cursor:pointer">Sign out</a>
-    </nav>
-  </header>
-
   @if (message()) {
     <div class="flash">{{ message() }}</div>
   }
