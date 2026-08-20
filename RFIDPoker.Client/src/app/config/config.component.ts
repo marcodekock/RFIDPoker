@@ -46,11 +46,13 @@ import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
                 <th>Port</th>
                 <th>Role</th>
                 <th>Seat #</th>
+                <th>Live</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let ant of device.antennas; let ai = index">
+              <tr *ngFor="let ant of device.antennas; let ai = index"
+                  [class.active]="antennaTagCount(device, ant) > 0">
                 <td>
                   <select [(ngModel)]="ant.antennaIndex">
                     <option *ngFor="let p of availablePorts(device, ant.antennaIndex)" [ngValue]="p">{{ p }}</option>
@@ -70,11 +72,17 @@ import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
                   <span *ngIf="ant.function !== 'PlayerSeat'" class="dim">—</span>
                 </td>
                 <td>
+                  <span class="live-indicator" [class.on]="antennaTagCount(device, ant) > 0">
+                    <span class="dot"></span>
+                    <span class="count">{{ antennaTagCount(device, ant) }}</span>
+                  </span>
+                </td>
+                <td>
                   <button class="danger small" (click)="removeAntenna(device, ai)" title="Unassign antenna">✕</button>
                 </td>
               </tr>
               <tr *ngIf="device.antennas.length === 0">
-                <td colspan="4" class="dim">No antennas assigned.</td>
+                <td colspan="5" class="dim">No antennas assigned.</td>
               </tr>
             </tbody>
           </table>
@@ -184,6 +192,12 @@ import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
     .danger:hover { background: #6a1a30; }
     .danger.small { padding: 0.2rem 0.5rem; font-size: 0.8rem; }
     .dim { color: #555; }
+    .antenna-table tr.active td { background: rgba(46, 204, 113, 0.08); }
+    .live-indicator { display: inline-flex; align-items: center; gap: 6px; color: #666; font-variant-numeric: tabular-nums; }
+    .live-indicator .dot { width: 10px; height: 10px; border-radius: 50%; background: #333; box-shadow: none; transition: background 0.15s, box-shadow 0.15s; }
+    .live-indicator.on { color: #7ee8a2; }
+    .live-indicator.on .dot { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
   `]
 })
 export class ConfigComponent implements OnInit {
@@ -313,6 +327,17 @@ export class ConfigComponent implements OnInit {
     const out: number[] = [];
     for (let i = 1; i <= 8; i++) if (!used.has(i)) out.push(i);
     return out;
+  }
+
+  /**
+   * Returns the number of tags currently seen on a given antenna, matched by device
+   * name + antenna index. Used to show a live pulse dot next to each row so operators
+   * can identify which physical antenna they're touching.
+   */
+  antennaTagCount(device: RfidDeviceConfig, ant: { antennaIndex: number }): number {
+    const match = this.readings.find(r =>
+      r.deviceName === device.name && r.antennaIndex === ant.antennaIndex);
+    return match ? match.tagIds.length : 0;
   }
 
   saveDevices(): void {

@@ -47,15 +47,17 @@ public class ObsClient(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Disconnect current session whenever the OBS settings row changes so we
-        // pick up the new URL/password on the next loop iteration.
+        // Signal used to wake the loop when the OBS settings row changes so we
+        // (a) reload settings without polling the DB every second and
+        // (b) recycle any live session to pick up the new URL/password.
+        using var settingsChanged = new SemaphoreSlim(0, 1);
+
         void OnSettingsChanged(string key)
         {
-            if (key == SettingKeys.Obs)
-            {
-                logger.LogInformation("OBS settings changed; recycling session.");
-                try { _sessionCts?.Cancel(); } catch { }
-            }
+            if (key != SettingKeys.Obs) return;
+            logger.LogInformation("OBS settings changed; recycling session.");
+            try { _sessionCts?.Cancel(); } catch { }
+            try { settingsChanged.Release(); } catch (SemaphoreFullException) { }
         }
 
         using (var scope = scopeFactory.CreateScope())
@@ -66,12 +68,17 @@ public class ObsClient(
 
         try
         {
+            // Prime the cached settings once; only reload when notified.
+            var settings = await LoadSettingsAsync(stoppingToken);
+
             while (!stoppingToken.IsCancellationRequested)
             {
-                var settings = await LoadSettingsAsync(stoppingToken);
                 if (!settings.Enabled)
                 {
-                    await Task.Delay(1000, stoppingToken);
+                    // Sleep until settings change instead of hitting the DB on a timer.
+                    try { await settingsChanged.WaitAsync(stoppingToken); }
+                    catch (OperationCanceledException) { break; }
+                    settings = await LoadSettingsAsync(stoppingToken);
                     continue;
                 }
 
@@ -91,6 +98,14 @@ public class ObsClient(
                 _socket = null;
                 _sessionCts?.Dispose();
                 _sessionCts = null;
+
+                // If the session ended because settings changed, reload before reconnecting.
+                if (settingsChanged.CurrentCount > 0)
+                {
+                    try { await settingsChanged.WaitAsync(stoppingToken); } catch (OperationCanceledException) { break; }
+                    settings = await LoadSettingsAsync(stoppingToken);
+                    continue;
+                }
 
                 try { await Task.Delay(Math.Max(500, settings.ReconnectDelayMs), stoppingToken); }
                 catch (OperationCanceledException) { break; }

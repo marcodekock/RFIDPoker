@@ -51,6 +51,12 @@ public class RfidReaderService(
     private DateTimeOffset? _communityStableSince;
     private DateTimeOffset? _communityAbsentSince;
 
+    // Set when a hand with a real board (>= 3 community cards) has its board cleared
+    // while some unfolded seat still physically has cards on the antenna. We defer the
+    // NewHand() call until those hole cards also leave so the overlay doesn't blank
+    // out while players are still holding the previous hand. Cleared on NewHand().
+    private bool _pendingNewHand;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -244,9 +250,10 @@ public class RfidReaderService(
 
     private void TryHandleMessage(DeviceConfig device, string json)
     {
-        // Broadcast is the master switch: while off-air we ignore every UID so the
-        // HUD, analysis engine, and camera director see a totally cold table.
-        if (!broadcast.IsLive) return;
+        // NOTE: we do NOT gate on broadcast.IsLive here. Off-air we still want to
+        // track tag activity per antenna so operators can identify antennas on the
+        // Config page (via the ReadingsUpdated snapshot). The analysis pipeline
+        // itself is gated inside NotifyIfChanged / ProcessAntennaReading.
 
         PepperMessage? msg;
         try
@@ -325,6 +332,78 @@ public class RfidReaderService(
                     NotifyIfChanged(device, antenna);
                 }
             }
+
+            // The community latch releases only when every latched card has been
+            // absent for CardLatchOffMs. That release happens inside UpdateCommunityCards,
+            // which is only called on community antenna events. Once the physical
+            // cards are gone there are no more events, so we need a periodic check
+            // here to actually release the latch and fire the deferred NewHand.
+            CheckLatchReleaseAndPendingNewHand();
+        }
+    }
+
+    /// <summary>
+    /// Time-driven check that runs on every eviction tick. Handles two things that
+    /// otherwise depend on tag events which may never come once the table is empty:
+    /// (1) releasing the community latch after CardLatchOffMs of full absence and
+    /// (2) firing the deferred NewHand() once all seats are physically clear.
+    /// Intentionally does NOT re-read the tag store or re-run UpdateCommunityCards
+    /// (doing so races with per-antenna events and causes board flicker).
+    /// </summary>
+    private void CheckLatchReleaseAndPendingNewHand()
+    {
+        var latchOff = TimeSpan.FromMilliseconds(Math.Max(0, _config.CardLatchOffMs));
+        var now = DateTimeOffset.UtcNow;
+        bool latchJustReleased = false;
+
+        lock (_communityLatchLock)
+        {
+            if (_latchedCommunity.Count > 0
+                && _communityAbsentSince.HasValue
+                && now - _communityAbsentSince.Value >= latchOff)
+            {
+                _latchedCommunity.Clear();
+                _communityAbsentSince = null;
+                _communityStableSince = null;
+                _lastCommunitySnapshot.Clear();
+                latchJustReleased = true;
+            }
+        }
+
+        if (latchJustReleased)
+        {
+            // Latch just released and the physical board is empty → mirror what
+            // UpdateCommunityCards would do at the tail of its own flow: arm the
+            // deferred NewHand if seats still have cards, otherwise reset now.
+            var previousBoard = tableState.CommunityCards.Count;
+            if (previousBoard > 0)
+            {
+                var anyHoleCards = tableState.Players.Any(p =>
+                    !p.IsFolded &&
+                    p.HoleCards.Count > 0 &&
+                    p.CardsMissingSince is null);
+                if (anyHoleCards)
+                {
+                    if (!_pendingNewHand)
+                    {
+                        logger.LogInformation(
+                            "Community latch released with unfolded seats still holding cards; deferring NewHand.");
+                        _pendingNewHand = true;
+                    }
+                    tableState.SetCommunityCards([]);
+                }
+                else
+                {
+                    tableState.NewHand();
+                    return;
+                }
+            }
+        }
+
+        if (_pendingNewHand)
+        {
+            try { TryFirePendingNewHand(); }
+            catch (Exception ex) { logger.LogWarning(ex, "Periodic pending NewHand check failed."); }
         }
     }
 
@@ -354,10 +433,16 @@ public class RfidReaderService(
 
         if (!changed) return;
 
-        var antenna = device.Antennas.FirstOrDefault(a => a.AntennaIndex == antennaIndex);
-        if (antenna is not null)
+        // Broadcast is the master switch for the analysis pipeline: while off-air
+        // we still stream the readings snapshot to clients (for the Config UI's
+        // live antenna indicator) but we do NOT feed table state / analysis.
+        if (broadcast.IsLive)
         {
-            ProcessAntennaReading(antenna, currentTags);
+            var antenna = device.Antennas.FirstOrDefault(a => a.AntennaIndex == antennaIndex);
+            if (antenna is not null)
+            {
+                ProcessAntennaReading(antenna, currentTags);
+            }
         }
 
         // Push updated readings snapshot to any connected clients.
@@ -421,6 +506,7 @@ public class RfidReaderService(
                     }
                 }
                 tableState.SetPlayerHoleCards(antenna.SeatNumber.Value, cards);
+                TryFirePendingNewHand();
                 break;
 
             case AntennaFunction.Flop:
@@ -489,16 +575,40 @@ public class RfidReaderService(
         // latched card has been absent for CardLatchOffMs.
         ApplyCommunityLatch(currentSet, communityCards);
 
-        // Auto-detect start of a new hand: board just went from non-empty back to empty
-        // AND no unfolded player is currently holding cards. Folded players keep their
-        // hole cards for display but must not block the reset. The latch is respected —
-        // if it hasn't released yet, communityCards will still contain the latched cards
-        // and this branch won't fire.
-        var hadBoard = tableState.CommunityCards.Count > 0;
-        var anyHoleCards = tableState.Players.Any(p => !p.IsFolded && p.HoleCards.Count > 0);
-        if (hadBoard && communityCards.Count == 0 && !anyHoleCards)
+        // Auto-detect start of a new hand: board just went from a real board (>= 3
+        // cards) back to empty. Folded players keep their hole cards for display but
+        // must not block the reset. If any UNFOLDED player still physically has cards
+        // on the seat antenna, defer the NewHand() until those cards are removed so
+        // the overlay doesn't blank out while players are still holding the previous
+        // hand. The latch is respected — if it hasn't released yet, communityCards
+        // will still contain the latched cards and this branch won't fire.
+        var previousBoard = tableState.CommunityCards.Count;
+        var boardJustCleared = previousBoard >= 3 && communityCards.Count == 0;
+        // See TryFirePendingNewHand: HoleCards is preserved during the missing-cards
+        // grace period, so we must exclude seats whose antenna is currently empty
+        // (CardsMissingSince != null) when deciding whether the table is still hot.
+        var anyHoleCards = tableState.Players.Any(p =>
+            !p.IsFolded &&
+            p.HoleCards.Count > 0 &&
+            p.CardsMissingSince is null);
+
+        if (boardJustCleared)
         {
-            tableState.NewHand();
+            if (anyHoleCards)
+            {
+                if (!_pendingNewHand)
+                {
+                    logger.LogInformation(
+                        "Board cleared with {Hole} unfolded seat(s) still holding cards; deferring NewHand until seats clear.",
+                        tableState.Players.Count(p => !p.IsFolded && p.HoleCards.Count > 0));
+                    _pendingNewHand = true;
+                }
+                tableState.SetCommunityCards(communityCards);
+            }
+            else
+            {
+                tableState.NewHand();
+            }
         }
         else
         {
@@ -588,6 +698,7 @@ public class RfidReaderService(
             _lastCommunitySnapshot.Clear();
             _communityStableSince = null;
             _communityAbsentSince = null;
+            _pendingNewHand = false;
         }
     }
 
@@ -634,6 +745,34 @@ public class RfidReaderService(
                 .ToList();
             tableState.SetPlayerHoleCards(player.SeatNumber, preserved);
         }
+
+        TryFirePendingNewHand();
+    }
+
+    /// <summary>
+    /// If the community board was cleared but unfolded seats were still holding
+    /// their hole cards, we deferred the <see cref="ITableStateManager.NewHand"/>
+    /// call. Once those seats are empty (naturally or via muck+fold) we finally
+    /// fire it here so the overlay switches to the new hand.
+    /// </summary>
+    private void TryFirePendingNewHand()
+    {
+        if (!_pendingNewHand) return;
+        if (tableState.CommunityCards.Count > 0) return;
+        // Note: SetPlayerHoleCards preserves HoleCards during the missing-cards grace
+        // period (so the 10s auto-fold can still see them). For deciding whether the
+        // physical table is clear we must look at whether the cards are *physically*
+        // present — a non-null CardsMissingSince means the antenna is empty even
+        // though HoleCards still holds the preserved values.
+        var anyHoleCards = tableState.Players.Any(p =>
+            !p.IsFolded &&
+            p.HoleCards.Count > 0 &&
+            p.CardsMissingSince is null);
+        if (anyHoleCards) return;
+
+        logger.LogInformation("Deferred NewHand firing now that all unfolded seats are empty.");
+        _pendingNewHand = false;
+        tableState.NewHand();
     }
 
     /// <summary>Friendly identifier for a device: Name if set, else host of the WebSocket URL, else the URL itself.</summary>
