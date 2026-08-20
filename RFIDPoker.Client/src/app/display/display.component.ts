@@ -29,8 +29,14 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
 
       <header>
         <span class="street-badge">{{ getStreetName(analysis.currentStreet) }}</span>
-        <span class="blinds-badge" *ngIf="analysis.blinds">Blinds {{ analysis.blinds }}</span>
+        <span class="blinds-badge" *ngIf="analysis.tournament">
+          Level {{ analysis.tournament.level }} • Blinds {{ analysis.tournament.smallBlind | number }}/{{ analysis.tournament.bigBlind | number }}
+        </span>
+        <span class="blinds-badge" *ngIf="!analysis.tournament && analysis.blinds">Blinds {{ analysis.blinds }}</span>
         <span class="player-count">{{ analysis.activePlayerCount }} players</span>
+        <span class="player-count" *ngIf="analysis.tournament">
+          Avg {{ analysis.tournament.averageStack | number }}
+        </span>
       </header>
 
       <section class="table-layout">

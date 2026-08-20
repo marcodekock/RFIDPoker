@@ -28,7 +28,31 @@ public record AnalysisResultDto
     public int ActivePlayerCount { get; init; }
     public HeadsUpOutsDto? HeadsUpOuts { get; init; }
     public BreakStateDto? Break { get; init; }
+    public TournamentDirectorSnapshotDto? Tournament { get; init; }
     public DateTimeOffset Timestamp { get; init; }
+}
+
+/// <summary>
+/// Snapshot of tournament-wide state sourced from Tournament Director (when enabled).
+/// Present only when the TD integration is active — front-end should treat these
+/// values as authoritative and hide the manual editors.
+/// </summary>
+public record TournamentDirectorSnapshotDto
+{
+    public int Level { get; init; }
+    public int PlayersLeft { get; init; }
+    public long TotalChips { get; init; }
+    public long AverageStack { get; init; }
+    public int SmallBlind { get; init; }
+    public int BigBlind { get; init; }
+    public int NextSmallBlind { get; init; }
+    public int NextBigBlind { get; init; }
+    public bool IsBreak { get; init; }
+    public bool NextIsBreak { get; init; }
+    public int SecondsLeft { get; init; }
+    public int LevelDuration { get; init; }
+    public bool ClockPaused { get; init; }
+    public DateTimeOffset ReceivedAtUtc { get; init; }
 }
 
 public record HeadsUpOutsDto

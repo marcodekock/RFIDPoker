@@ -1,9 +1,56 @@
 <div class="manage">
-  @if (message()) {
-    <div class="flash">{{ message() }}</div>
-  }
+  <section class="card broadcast-card" [class.live]="broadcast.isLive()">
+    <div class="broadcast-row">
+      <div>
+        <h2>Broadcast</h2>
+        <p class="broadcast-sub">
+          {{ broadcast.isLive()
+              ? 'Table is LIVE. RFID reads, analysis, and camera switching are active.'
+              : 'Table is OFF-AIR. RFID reads are ignored and the HUD is blank.' }}
+        </p>
+      </div>
+      <button
+        class="broadcast-btn"
+        [class.primary]="!broadcast.isLive()"
+        [class.danger]="broadcast.isLive()"
+        (click)="toggleBroadcast()">
+        {{ broadcast.isLive() ? '■ Stop Broadcast' : '● Start Broadcast' }}
+      </button>
+    </div>
+  </section>
 
-  <section class="card">
+  <section class="card broadcast-card" [class.live]="tdIntegrationEnabled()">
+    <div class="broadcast-row">
+      <div>
+        <h2>Tournament Director Integration</h2>
+        <p class="broadcast-sub">
+          {{ tdIntegrationEnabled()
+              ? 'Integration ENABLED. Blinds, break, and players come from Tournament Director.'
+              : (tdHasToken()
+                  ? 'Integration DISABLED. Manual editors below control blinds, break, and players.'
+                  : 'No Tournament Director token. Generate one on the Tokens page before enabling.') }}
+        </p>
+      </div>
+      <button
+        class="broadcast-btn"
+        [class.primary]="!tdIntegrationEnabled()"
+        [class.danger]="tdIntegrationEnabled()"
+        [disabled]="tdBusy()"
+        (click)="toggleTdIntegration()">
+        {{ tdIntegrationEnabled() ? '■ Disable TD Integration' : '● Enable TD Integration' }}
+      </button>
+    </div>
+  </section>
+
+  <section class="card" *ngIf="tdEnabled()">
+    <h2>Tournament Director</h2>
+    <p style="margin:0;color:#9fb0bb;font-size:13px;">
+      Blinds, break timer, and players remaining are being managed by Tournament Director.
+      The manual editors are hidden while the integration is active.
+    </p>
+  </section>
+
+  <section class="card" *ngIf="!tdEnabled()">
     <h2>Break Timer</h2>
 
     @if (breakState(); as b) {
@@ -46,7 +93,7 @@
     }
   </section>
 
-  <section class="card">
+  <section class="card" *ngIf="!tdEnabled()">
     <h2>Blinds</h2>
     <div class="controls">
       <input type="text" placeholder="e.g. 2000/4000" [ngModel]="blinds()" (ngModelChange)="blinds.set($event)" />
@@ -58,6 +105,43 @@
       @for (b of ['25/50', '50/100', '100/200', '200/400', '500/1000', '1000/2000', '2000/4000', '5000/10000']; track b) {
         <button (click)="blinds.set(b); saveBlinds()">{{ b }}</button>
       }
+    </div>
+  </section>
+
+  <section class="card" *ngIf="!tdEnabled()">
+    <h2>Tournament Info</h2>
+    <p style="margin:0 0 10px;color:#9fb0bb;font-size:13px;">
+      Optional. When filled in, these values appear on the overlay in the top-right info panel.
+      Leave a field blank / zero to hide it.
+    </p>
+    <div class="controls">
+      <label>Level:
+        <input type="number" min="0" [ngModel]="manualTd().level" (ngModelChange)="patchManualTd({ level: +$event || 0 })" />
+      </label>
+      <label>Players Left:
+        <input type="number" min="0" [ngModel]="manualTd().playersLeft" (ngModelChange)="patchManualTd({ playersLeft: +$event || 0 })" />
+      </label>
+      <label>Total Chips:
+        <input type="number" min="0" [ngModel]="manualTd().totalChips" (ngModelChange)="patchManualTd({ totalChips: +$event || 0 })" />
+      </label>
+    </div>
+    <div class="controls">
+      <label>SB:
+        <input type="number" min="0" [ngModel]="manualTd().smallBlind" (ngModelChange)="patchManualTd({ smallBlind: +$event || 0 })" />
+      </label>
+      <label>BB:
+        <input type="number" min="0" [ngModel]="manualTd().bigBlind" (ngModelChange)="patchManualTd({ bigBlind: +$event || 0 })" />
+      </label>
+      <label>Next SB:
+        <input type="number" min="0" [ngModel]="manualTd().nextSmallBlind" (ngModelChange)="patchManualTd({ nextSmallBlind: +$event || 0 })" />
+      </label>
+      <label>Next BB:
+        <input type="number" min="0" [ngModel]="manualTd().nextBigBlind" (ngModelChange)="patchManualTd({ nextBigBlind: +$event || 0 })" />
+      </label>
+    </div>
+    <div class="controls">
+      <button (click)="saveManualTd()" [disabled]="savingManualTd()" class="primary">Save</button>
+      <button (click)="clearManualTd()">Clear</button>
     </div>
   </section>
 

@@ -12,6 +12,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<CardMappingEntity> CardMappings => Set<CardMappingEntity>();
     public DbSet<OverlayToken> OverlayTokens => Set<OverlayToken>();
     public DbSet<Camera> Cameras => Set<Camera>();
+    public DbSet<AppSetting> AppSettings => Set<AppSetting>();
+    public DbSet<TournamentDirectorToken> TournamentDirectorTokens => Set<TournamentDirectorToken>();
+    public DbSet<RfidDeviceEntity> RfidDevices => Set<RfidDeviceEntity>();
+    public DbSet<RfidAntennaEntity> RfidAntennas => Set<RfidAntennaEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -39,6 +43,40 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.Property(c => c.Name).HasMaxLength(128).IsRequired();
             e.Property(c => c.ObsSceneName).HasMaxLength(128).IsRequired();
             e.Property(c => c.Role).HasConversion<string>().HasMaxLength(16);
+        });
+
+        modelBuilder.Entity<AppSetting>(e =>
+        {
+            e.ToTable("AppSettings");
+            e.HasKey(s => s.Key);
+            e.Property(s => s.Key).HasMaxLength(128);
+        });
+
+        modelBuilder.Entity<TournamentDirectorToken>(e =>
+        {
+            e.ToTable("TournamentDirectorTokens");
+            e.HasIndex(t => t.TokenHash).IsUnique();
+            e.Property(t => t.TokenHash).HasMaxLength(128).IsRequired();
+        });
+
+        modelBuilder.Entity<RfidDeviceEntity>(e =>
+        {
+            e.ToTable("RfidDevices");
+            e.HasKey(d => d.Id);
+            e.Property(d => d.Name).HasMaxLength(128).IsRequired();
+            e.Property(d => d.WebSocketUrl).HasMaxLength(512).IsRequired();
+            e.HasMany(d => d.Antennas)
+             .WithOne(a => a.Device!)
+             .HasForeignKey(a => a.DeviceId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RfidAntennaEntity>(e =>
+        {
+            e.ToTable("RfidAntennas");
+            e.HasKey(a => a.Id);
+            e.Property(a => a.Function).HasConversion<string>().HasMaxLength(16);
+            e.HasIndex(a => new { a.DeviceId, a.AntennaIndex }).IsUnique();
         });
     }
 }

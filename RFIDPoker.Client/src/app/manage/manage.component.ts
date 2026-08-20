@@ -6,12 +6,24 @@ import { HttpClient } from '@angular/common/http';
 import { Subscription, interval } from 'rxjs';
 import { AnalysisService } from '../services/analysis.service';
 import { AuthService } from '../services/auth.service';
+import { BroadcastService } from '../services/broadcast.service';
 import { BreakState } from '../models';
+import { ToastrService } from 'ngx-toastr';
 
 interface PlayerRow {
   seatNumber: number;
   name: string;
   chipCount: number | null;
+}
+
+interface ManualTdInfo {
+  level: number;
+  playersLeft: number;
+  totalChips: number;
+  smallBlind: number;
+  bigBlind: number;
+  nextSmallBlind: number;
+  nextBigBlind: number;
 }
 
 @Component({
@@ -27,9 +39,16 @@ export class ManageComponent implements OnInit, OnDestroy {
   breakDurationMinutes = signal<number>(15);
   breakLabel = signal<string>('Break');
   breakState = signal<BreakState | null>(null);
+  tdEnabled = signal<boolean>(false);
+  tdIntegrationEnabled = signal<boolean>(false);
+  tdHasToken = signal<boolean>(false);
+  tdBusy = signal<boolean>(false);
   savingBlinds = signal(false);
   savingPlayers = signal(false);
-  message = signal<string>('');
+  manualTd = signal<ManualTdInfo>({
+    level: 0, playersLeft: 0, totalChips: 0, smallBlind: 0, bigBlind: 0, nextSmallBlind: 0, nextBigBlind: 0
+  });
+  savingManualTd = signal(false);
 
   private sub?: Subscription;
   private tick?: Subscription;
@@ -42,15 +61,101 @@ export class ManageComponent implements OnInit, OnDestroy {
     return `${m}:${sec.toString().padStart(2, '0')}`;
   });
 
-  constructor(private http: HttpClient, private analysis: AnalysisService, private auth: AuthService) {}
+  constructor(private http: HttpClient, private analysis: AnalysisService, private auth: AuthService, public broadcast: BroadcastService, private toastr: ToastrService) {}
+
+  async toggleBroadcast() {
+    try {
+      if (this.broadcast.isLive()) {
+        await this.broadcast.stop();
+        this.toastr.warning('RFID reads are now ignored.', 'Broadcast stopped');
+      } else {
+        await this.broadcast.start();
+        this.toastr.success('Table is live.', 'Broadcast started');
+      }
+    } catch {
+      this.toastr.error('Failed to change broadcast state.');
+    }
+  }
+
+  loadTdStatus() {
+    this.http.get<any>('/api/tournament-director/status').subscribe({
+      next: s => {
+        this.tdIntegrationEnabled.set(!!s?.enabled);
+        this.tdHasToken.set(!!s?.hasActiveToken);
+      },
+      error: () => {}
+    });
+  }
+
+  loadManualTd() {
+    this.http.get<any>('/api/tournament/manual-info').subscribe({
+      next: v => {
+        if (v) this.manualTd.set({
+          level: v.level ?? 0,
+          playersLeft: v.playersLeft ?? 0,
+          totalChips: v.totalChips ?? 0,
+          smallBlind: v.smallBlind ?? 0,
+          bigBlind: v.bigBlind ?? 0,
+          nextSmallBlind: v.nextSmallBlind ?? 0,
+          nextBigBlind: v.nextBigBlind ?? 0
+        });
+      },
+      error: () => {}
+    });
+  }
+
+  patchManualTd(patch: Partial<ManualTdInfo>) {
+    this.manualTd.update(v => ({ ...v, ...patch }));
+  }
+
+  saveManualTd() {
+    this.savingManualTd.set(true);
+    this.http.put('/api/tournament/manual-info', this.manualTd()).subscribe({
+      next: () => { this.savingManualTd.set(false); this.toastr.success('Tournament info saved'); },
+      error: () => { this.savingManualTd.set(false); this.toastr.error('Failed to save tournament info'); }
+    });
+  }
+
+  clearManualTd() {
+    this.manualTd.set({ level: 0, playersLeft: 0, totalChips: 0, smallBlind: 0, bigBlind: 0, nextSmallBlind: 0, nextBigBlind: 0 });
+    this.saveManualTd();
+  }
+
+  toggleTdIntegration() {
+    const willEnable = !this.tdIntegrationEnabled();
+    if (willEnable && !this.tdHasToken()) {
+      this.toastr.warning('Generate a Tournament Director token on the Tokens page before enabling the integration.', 'No active token');
+      return;
+    }
+    this.tdBusy.set(true);
+    this.http.put('/api/tournament-director/settings', { enabled: willEnable }).subscribe({
+      next: () => {
+        this.tdBusy.set(false);
+        this.tdIntegrationEnabled.set(willEnable);
+        if (willEnable) {
+          this.toastr.success('Tournament Director integration enabled.');
+        } else {
+          this.toastr.warning('Tournament Director integration disabled.');
+        }
+      },
+      error: (err) => {
+        this.tdBusy.set(false);
+        this.toastr.error(err?.error?.message ?? 'Failed to update Tournament Director integration.');
+        this.loadTdStatus();
+      }
+    });
+  }
 
   ngOnInit(): void {
     this.loadPlayers();
     this.loadBlinds();
     this.loadBreak();
+    this.loadTdStatus();
+    this.loadManualTd();
 
     this.sub = this.analysis.analysis$.subscribe(r => {
       if (!r) return;
+      this.tdEnabled.set(!!r.tournament);
       // Keep blinds/break state in sync with server broadcasts (do not stomp
       // player rows the user might be editing).
       if (r.break) {
@@ -194,8 +299,11 @@ export class ManageComponent implements OnInit, OnDestroy {
   }
 
   private flash(msg: string) {
-    this.message.set(msg);
-    setTimeout(() => { if (this.message() === msg) this.message.set(''); }, 2500);
+    if (msg.toLowerCase().startsWith('error')) {
+      this.toastr.error(msg);
+    } else {
+      this.toastr.success(msg);
+    }
   }
 
   trackBySeat = (_: number, p: PlayerRow) => p.seatNumber;

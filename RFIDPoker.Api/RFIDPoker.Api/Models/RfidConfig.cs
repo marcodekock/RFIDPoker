@@ -58,8 +58,6 @@ public class RfidConfig
     /// the latch is released. Muck events release seat latches immediately.
     /// </summary>
     public int CardLatchOffMs { get; set; } = 10000;
-
-    public List<DeviceConfig> Devices { get; set; } = [];
 }
 
 public class DeviceConfig

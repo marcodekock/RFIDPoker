@@ -27,7 +27,25 @@ export interface AnalysisResult {
   activePlayerCount: number;
   headsUpOuts?: HeadsUpOuts | null;
   break?: BreakState | null;
+  tournament?: TournamentDirectorSnapshot | null;
   timestamp: string;
+}
+
+export interface TournamentDirectorSnapshot {
+  level: number;
+  playersLeft: number;
+  totalChips: number;
+  averageStack: number;
+  smallBlind: number;
+  bigBlind: number;
+  nextSmallBlind: number;
+  nextBigBlind: number;
+  isBreak: boolean;
+  nextIsBreak: boolean;
+  secondsLeft: number;
+  levelDuration: number;
+  clockPaused: boolean;
+  receivedAtUtc: string;
 }
 
 export interface HeadsUpOuts {

@@ -20,6 +20,16 @@ interface CameraStatus {
   currentScene: string | null;
   desiredScene: string | null;
   handInProgress: boolean;
+  broadcastLive: boolean;
+}
+
+interface ObsSettings {
+  enabled: boolean;
+  webSocketUrl: string;
+  password: string;
+  reconnectDelayMs: number;
+  secondaryRotationSeconds: number;
+  switchDebounceMs: number;
 }
 
 interface Draft {
@@ -51,11 +61,39 @@ interface Draft {
           <div><span class="label">Hand in progress:</span> {{ s.handInProgress ? 'Yes' : 'No' }}</div>
           <div><span class="label">Desired scene:</span> {{ s.desiredScene || '—' }}</div>
           <div><span class="label">Current scene:</span> {{ s.currentScene || '—' }}</div>
+          <div><span class="label">Broadcast:</span>
+            <span [class.ok]="s.broadcastLive" [class.bad]="!s.broadcastLive">{{ s.broadcastLive ? 'LIVE' : 'OFF-AIR' }}</span>
+          </div>
         </div>
-        <p class="hint" *ngIf="!s.enabled">
-          Enable the director in <code>appsettings.json</code> under <code>Obs.Enabled = true</code>
-          and restart the API to activate camera switching.
-        </p>
+      </section>
+
+      <section class="card">
+        <h2>OBS Connection</h2>
+        <form (ngSubmit)="saveObs()" *ngIf="obs() as o" class="obs-form">
+          <label><input type="checkbox" [(ngModel)]="o.enabled" name="obsEnabled" /> Enable camera director</label>
+          <label>WebSocket URL
+            <input type="text" [(ngModel)]="o.webSocketUrl" name="obsUrl" placeholder="ws://localhost:4455" />
+          </label>
+          <label>Password
+            <input type="password" [(ngModel)]="o.password" name="obsPwd" placeholder="(leave blank / '********' to keep existing)" />
+          </label>
+          <label>Reconnect delay (ms)
+            <input type="number" [(ngModel)]="o.reconnectDelayMs" name="obsReconnect" min="500" />
+          </label>
+          <label>Secondary rotation (s)
+            <input type="number" [(ngModel)]="o.secondaryRotationSeconds" name="obsRotate" min="1" />
+          </label>
+          <label>Switch debounce (ms)
+            <input type="number" [(ngModel)]="o.switchDebounceMs" name="obsDebounce" min="0" />
+          </label>
+          <div class="row">
+            <button type="submit" class="primary" [disabled]="savingObs()">
+              {{ savingObs() ? 'Saving…' : 'Save OBS Settings' }}
+            </button>
+            <span class="err" *ngIf="obsError()">{{ obsError() }}</span>
+            <span class="ok-msg" *ngIf="obsSaved()">Saved. Reconnecting to OBS…</span>
+          </div>
+        </form>
       </section>
 
       <section class="card">
@@ -138,6 +176,13 @@ interface Draft {
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .row { display: flex; gap: 10px; align-items: center; }
     .err { color: #ff8080; font-size: 13px; }
+    .ok-msg { color: #7dffb0; font-size: 13px; }
+    .obs-form { display: grid; grid-template-columns: repeat(2, minmax(200px, 1fr)); gap: 10px 16px; }
+    .obs-form label { display: flex; flex-direction: column; font-size: 13px; color: #9fb0bb; gap: 4px; }
+    .obs-form input[type=text], .obs-form input[type=password], .obs-form input[type=number] {
+      background: #0e1418; color: #e6ecef; border: 1px solid #1c2731; border-radius: 4px; padding: 6px 8px;
+    }
+    .obs-form .row { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
   `]
 })
 export class CamerasComponent implements OnInit, OnDestroy {
@@ -147,6 +192,11 @@ export class CamerasComponent implements OnInit, OnDestroy {
   saving = signal(false);
   error = signal<string | null>(null);
 
+  obs = signal<ObsSettings | null>(null);
+  savingObs = signal(false);
+  obsError = signal<string | null>(null);
+  obsSaved = signal(false);
+
   private statusTimer: any;
 
   constructor(private http: HttpClient) {}
@@ -154,6 +204,7 @@ export class CamerasComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.reload();
     this.refreshStatus();
+    this.loadObs();
     this.statusTimer = setInterval(() => this.refreshStatus(), 3000);
   }
 
@@ -229,5 +280,32 @@ export class CamerasComponent implements OnInit, OnDestroy {
 
   private emptyDraft(): Draft {
     return { id: null, name: '', obsSceneName: '', role: 'Secondary', sortOrder: 0, enabled: true };
+  }
+
+  private loadObs() {
+    this.http.get<ObsSettings>('/api/obs').subscribe({
+      next: s => this.obs.set(s),
+      error: err => this.obsError.set(err?.error ?? 'Failed to load OBS settings.')
+    });
+  }
+
+  saveObs() {
+    const s = this.obs();
+    if (!s) return;
+    this.savingObs.set(true);
+    this.obsError.set(null);
+    this.obsSaved.set(false);
+    this.http.put<ObsSettings>('/api/obs', s).subscribe({
+      next: updated => {
+        this.savingObs.set(false);
+        this.obs.set(updated);
+        this.obsSaved.set(true);
+        setTimeout(() => this.obsSaved.set(false), 3000);
+      },
+      error: err => {
+        this.savingObs.set(false);
+        this.obsError.set(err?.error ?? 'Save failed.');
+      }
+    });
   }
 }

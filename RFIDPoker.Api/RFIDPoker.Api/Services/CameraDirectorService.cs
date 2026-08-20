@@ -1,5 +1,5 @@
-using Microsoft.Extensions.Options;
 using RFIDPoker.Api.Models;
+using Microsoft.Extensions.Options;
 
 namespace RFIDPoker.Api.Services;
 
@@ -11,7 +11,8 @@ public record CameraDirectorStatus(
     bool Connected,
     string? CurrentScene,
     string? DesiredScene,
-    bool HandInProgress);
+    bool HandInProgress,
+    bool BroadcastLive);
 
 public interface ICameraDirector
 {
@@ -20,19 +21,21 @@ public interface ICameraDirector
 
 /// <summary>
 /// Watches the table state and drives OBS scene switches.
-/// - Main scene is selected while a hand is live (at least one non-folded player has
-///   2 hole cards AND every non-folded player with any dealt cards has 2 hole cards).
+/// - Main scene is selected while a hand is live AND broadcast is live.
 /// - Otherwise the enabled secondary cameras are rotated on a fixed interval.
+/// - Fully idle when broadcast is stopped (no scene switches sent).
 /// </summary>
 public class CameraDirectorService(
     ITableStateManager tableState,
     IObsClient obs,
+    IBroadcastState broadcast,
     IServiceScopeFactory scopeFactory,
-    IOptionsMonitor<ObsSettings> settingsMonitor,
+    IOptions<ObsSettings> bootstrapDefaults,
     ILogger<CameraDirectorService> logger) : BackgroundService, ICameraDirector
 {
     private readonly SemaphoreSlim _tick = new(0, int.MaxValue);
     private List<Camera> _cameras = [];
+    private ObsSettings _settings = bootstrapDefaults.Value;
     private int _secondaryIndex;
     private string? _lastAppliedScene;
     private DateTimeOffset _lastSwitchAt = DateTimeOffset.MinValue;
@@ -40,34 +43,45 @@ public class CameraDirectorService(
     private string? _lastDesiredScene;
 
     public CameraDirectorStatus GetStatus() => new(
-        Enabled: settingsMonitor.CurrentValue.Enabled,
+        Enabled: _settings.Enabled,
         Connected: obs.IsConnected,
         CurrentScene: obs.CurrentScene,
         DesiredScene: _lastDesiredScene,
-        HandInProgress: _lastHandInProgress);
+        HandInProgress: _lastHandInProgress,
+        BroadcastLive: broadcast.IsLive);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await LoadCamerasAsync(stoppingToken);
+        await LoadSettingsAsync(stoppingToken);
 
         void OnStateChanged() => _tick.Release();
         void OnCamerasChanged() { _ = LoadCamerasAsync(stoppingToken); _tick.Release(); }
+        void OnSettingChanged(string key)
+        {
+            if (key == SettingKeys.Obs)
+            {
+                _ = LoadSettingsAsync(stoppingToken);
+                _tick.Release();
+            }
+        }
+        void OnBroadcastChanged() => _tick.Release();
 
         tableState.StateChanged += OnStateChanged;
         tableState.HandReset += OnStateChanged;
+        broadcast.Changed += OnBroadcastChanged;
 
-        // Subscribe once via a scoped repo so the static Changed event carries the callback.
         using (var scope = scopeFactory.CreateScope())
         {
-            var repo = scope.ServiceProvider.GetRequiredService<ICameraRepository>();
-            repo.Changed += OnCamerasChanged;
+            scope.ServiceProvider.GetRequiredService<ICameraRepository>().Changed += OnCamerasChanged;
+            scope.ServiceProvider.GetRequiredService<ISettingsStore>().Changed += OnSettingChanged;
         }
 
         try
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                var rotate = TimeSpan.FromSeconds(Math.Max(1, settingsMonitor.CurrentValue.SecondaryRotationSeconds));
+                var rotate = TimeSpan.FromSeconds(Math.Max(1, _settings.SecondaryRotationSeconds));
                 using var tickCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                 var timeout = Task.Delay(rotate, tickCts.Token);
                 var signal = _tick.WaitAsync(tickCts.Token);
@@ -88,6 +102,7 @@ public class CameraDirectorService(
         {
             tableState.StateChanged -= OnStateChanged;
             tableState.HandReset -= OnStateChanged;
+            broadcast.Changed -= OnBroadcastChanged;
         }
     }
 
@@ -105,10 +120,24 @@ public class CameraDirectorService(
         }
     }
 
+    private async Task LoadSettingsAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<ISettingsStore>();
+            _settings = await store.GetAsync(SettingKeys.Obs, bootstrapDefaults.Value, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to load OBS settings; using previous.");
+        }
+    }
+
     private async Task ApplyAsync(CancellationToken ct)
     {
-        var settings = settingsMonitor.CurrentValue;
-        if (!settings.Enabled) return;
+        if (!_settings.Enabled) return;
+        if (!broadcast.IsLive) { _lastDesiredScene = null; return; }
 
         var handInProgress = IsHandInProgress();
         _lastHandInProgress = handInProgress;
@@ -125,7 +154,6 @@ public class CameraDirectorService(
                 .ToList();
             if (secondaries.Count == 0)
             {
-                // Fall back to main if no secondary is configured.
                 target = _cameras.FirstOrDefault(c => c.Enabled && c.Role == CameraRole.Main);
             }
             else
@@ -138,15 +166,11 @@ public class CameraDirectorService(
         _lastDesiredScene = target?.ObsSceneName;
         if (target is null) return;
 
-        // While a hand is live, don't re-send the same scene name over and over —
-        // OBS ignores duplicates but we want to avoid log noise. Between hands we
-        // *do* re-fire so rotation works even when the same secondary comes up twice.
         if (handInProgress && string.Equals(target.ObsSceneName, _lastAppliedScene, StringComparison.Ordinal))
             return;
 
-        // Debounce rapid StateChanged bursts (mid-deal card flicker).
         var since = DateTimeOffset.UtcNow - _lastSwitchAt;
-        var debounce = TimeSpan.FromMilliseconds(Math.Max(0, settings.SwitchDebounceMs));
+        var debounce = TimeSpan.FromMilliseconds(Math.Max(0, _settings.SwitchDebounceMs));
         if (since < debounce)
         {
             try { await Task.Delay(debounce - since, ct); }

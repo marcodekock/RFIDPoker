@@ -51,6 +51,15 @@ import {
 
       <ng-container *ngIf="!analysis.break?.isActive">
 
+      <!-- Tournament info (top-right): shown whenever a tournament snapshot is present. -->
+      <div class="tournament-info" *ngIf="analysis.tournament as t">
+        <div class="ti-row" *ngIf="t.level > 0"><span class="ti-label">LEVEL</span><span class="ti-value">{{ t.level }}</span></div>
+        <div class="ti-row" *ngIf="t.playersLeft > 0"><span class="ti-label">PLAYERS</span><span class="ti-value">{{ t.playersLeft }}</span></div>
+        <div class="ti-row" *ngIf="t.averageStack > 0"><span class="ti-label">AVG STACK</span><span class="ti-value">{{ t.averageStack | number }}</span></div>
+        <div class="ti-row" *ngIf="t.smallBlind > 0 || t.bigBlind > 0"><span class="ti-label">BLINDS</span><span class="ti-value">{{ t.smallBlind | number }}/{{ t.bigBlind | number }}</span></div>
+        <div class="ti-row ti-next" *ngIf="t.nextSmallBlind > 0 || t.nextBigBlind > 0"><span class="ti-label">NEXT</span><span class="ti-value">{{ t.nextSmallBlind | number }}/{{ t.nextBigBlind | number }}</span></div>
+      </div>
+
       <!-- Heads-up outs tab (top-left, only when 2 players remain on flop/turn) -->
       <div class="outs-panel" *ngIf="analysis.headsUpOuts as ho">
         <div class="outs-header">
@@ -248,6 +257,41 @@ import {
       border-radius: 4px;
       padding: 2px 8px;
     }
+
+    /* ---- Tournament info (top-right) ---- */
+    .tournament-info {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 14px;
+      background: rgba(15, 23, 32, 0.78);
+      border: 1px solid rgba(255, 209, 102, 0.35);
+      border-radius: 10px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+      backdrop-filter: blur(6px);
+      min-width: 140px;
+    }
+    .tournament-info .ti-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      font-size: 0.85rem;
+    }
+    .tournament-info .ti-label {
+      color: #8fa4b0;
+      font-size: 0.65rem;
+      letter-spacing: 0.14em;
+      font-weight: 700;
+    }
+    .tournament-info .ti-value {
+      color: #ffd166;
+      font-weight: 700;
+    }
+    .tournament-info .ti-next .ti-value { color: #e6ecef; }
 
     .cards-row { display: flex; gap: 8px; }
 

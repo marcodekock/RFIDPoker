@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RFIDPoker.Api.Data;
 
@@ -10,9 +11,11 @@ using RFIDPoker.Api.Data;
 namespace RFIDPoker.Api.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260820115049_AddAppSettings")]
+    partial class AddAppSettings
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -246,34 +249,6 @@ namespace RFIDPoker.Api.Data.Migrations
                     b.ToTable("OverlayTokens");
                 });
 
-            modelBuilder.Entity("RFIDPoker.Api.Auth.TournamentDirectorToken", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("CreatedByUserId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("IsRevoked")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique();
-
-                    b.ToTable("TournamentDirectorTokens", (string)null);
-                });
-
             modelBuilder.Entity("RFIDPoker.Api.Data.CardMappingEntity", b =>
                 {
                     b.Property<string>("TagId")
@@ -338,55 +313,6 @@ namespace RFIDPoker.Api.Data.Migrations
                     b.ToTable("Cameras", (string)null);
                 });
 
-            modelBuilder.Entity("RFIDPoker.Api.Models.RfidAntennaEntity", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("AntennaIndex")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("DeviceId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Function")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("TEXT");
-
-                    b.Property<int?>("SeatNumber")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DeviceId", "AntennaIndex")
-                        .IsUnique();
-
-                    b.ToTable("RfidAntennas", (string)null);
-                });
-
-            modelBuilder.Entity("RFIDPoker.Api.Models.RfidDeviceEntity", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("WebSocketUrl")
-                        .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("RfidDevices", (string)null);
-                });
-
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)
@@ -436,22 +362,6 @@ namespace RFIDPoker.Api.Data.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-                });
-
-            modelBuilder.Entity("RFIDPoker.Api.Models.RfidAntennaEntity", b =>
-                {
-                    b.HasOne("RFIDPoker.Api.Models.RfidDeviceEntity", "Device")
-                        .WithMany("Antennas")
-                        .HasForeignKey("DeviceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Device");
-                });
-
-            modelBuilder.Entity("RFIDPoker.Api.Models.RfidDeviceEntity", b =>
-                {
-                    b.Navigation("Antennas");
                 });
 #pragma warning restore 612, 618
         }

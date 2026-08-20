@@ -195,6 +195,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PokerAnalysisEngin
 
 builder.Services.Configure<RfidConfig>(builder.Configuration.GetSection(RfidConfig.SectionName));
 
+builder.Services.AddSingleton<IRfidDeviceStore, RfidDeviceStore>();
 builder.Services.AddSingleton<ICardTagMapper, CardTagMapper>();
 builder.Services.AddSingleton<RfidReaderService>();
 builder.Services.AddSingleton<IRfidReaderService>(sp => sp.GetRequiredService<RfidReaderService>());
@@ -203,9 +204,15 @@ builder.Services.AddHostedService<IdleHandResetService>();
 builder.Services.AddHostedService<MissingCardsAutoFoldService>();
 
 // --- OBS camera director ----------------------------------------------------
+// The Obs config section is kept as bootstrap defaults only; live settings come
+// from ISettingsStore so operators can edit them from the admin UI at runtime.
 builder.Services.Configure<RFIDPoker.Api.Models.ObsSettings>(
     builder.Configuration.GetSection(RFIDPoker.Api.Models.ObsSettings.SectionName));
 builder.Services.AddScoped<ICameraRepository, CameraRepository>();
+builder.Services.AddScoped<ISettingsStore, SettingsStore>();
+builder.Services.AddSingleton<BroadcastState>();
+builder.Services.AddSingleton<IBroadcastState>(sp => sp.GetRequiredService<BroadcastState>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<BroadcastState>());
 builder.Services.AddSingleton<ObsClient>();
 builder.Services.AddSingleton<IObsClient>(sp => sp.GetRequiredService<ObsClient>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ObsClient>());
@@ -215,6 +222,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraDirectorServ
 
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IOverlayTokenService, OverlayTokenService>();
+builder.Services.AddScoped<ITournamentDirectorTokenService, TournamentDirectorTokenService>();
+builder.Services.AddSingleton<ITournamentDirectorState, TournamentDirectorState>();
+builder.Services.AddSingleton<IManualTournamentState, ManualTournamentState>();
 builder.Services.Configure<RFIDPoker.Api.Controllers.OverlayTokenSettings>(
     builder.Configuration.GetSection("OverlayToken"));
 
@@ -232,6 +242,19 @@ using (var scope = app.Services.CreateScope())
 		if (!await roleMgr.RoleExistsAsync(role))
 			await roleMgr.CreateAsync(new IdentityRole(role));
 	}
+
+	// Hydrate the TD enabled flag from the settings store into the singleton snapshot.
+	var settingsStore = scope.ServiceProvider.GetRequiredService<ISettingsStore>();
+	var tdState = scope.ServiceProvider.GetRequiredService<ITournamentDirectorState>();
+	tdState.SetEnabled(await settingsStore.GetAsync(SettingKeys.TournamentDirectorEnabled, false));
+
+	var manualTd = scope.ServiceProvider.GetRequiredService<IManualTournamentState>();
+	manualTd.Set(await settingsStore.GetAsync(SettingKeys.ManualTournamentInfo, new ManualTournamentInfo()));
+
+	// Hydrate the RFID device store from the DB. Operators manage the layout
+	// entirely from the Config page; there is no appsettings fallback.
+	var rfidStore = scope.ServiceProvider.GetRequiredService<IRfidDeviceStore>();
+	await rfidStore.ReloadAsync();
 }
 
 if (app.Environment.IsDevelopment())

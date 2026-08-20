@@ -9,6 +9,7 @@ namespace RFIDPoker.Api.Services;
 /// </summary>
 public class IdleHandResetService(
     ITableStateManager tableState,
+    IBroadcastState broadcast,
     IOptions<RfidConfig> rfidOptions,
     ILogger<IdleHandResetService> logger) : BackgroundService
 {
@@ -39,6 +40,14 @@ public class IdleHandResetService(
 
     private void Tick()
     {
+        // Master switch: off-air we neither idle-detect nor issue NewHand().
+        if (!broadcast.IsLive)
+        {
+            _handWasActive = false;
+            _emptySince = null;
+            return;
+        }
+
         // "Cards present" for the purpose of idle detection means unfolded seats still
         // holding cards, or a live board. Folded players preserve their hole cards for
         // display but shouldn't keep the hand alive; the muck also shouldn't.

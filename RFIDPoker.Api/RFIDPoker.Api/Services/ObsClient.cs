@@ -28,7 +28,8 @@ public interface IObsClient
 /// loop that maintains a live session and exposes <see cref="SetSceneAsync"/>.
 /// </summary>
 public class ObsClient(
-    IOptionsMonitor<ObsSettings> settingsMonitor,
+    IServiceScopeFactory scopeFactory,
+    IOptions<ObsSettings> bootstrapDefaults,
     ILogger<ObsClient> logger) : BackgroundService, IObsClient
 {
     private static readonly JsonSerializerOptions Json = new()
@@ -40,36 +41,82 @@ public class ObsClient(
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private ClientWebSocket? _socket;
     private volatile bool _identified;
+    private CancellationTokenSource? _sessionCts;
     public bool IsConnected => _identified && _socket?.State == WebSocketState.Open;
     public string? CurrentScene { get; private set; }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        // Disconnect current session whenever the OBS settings row changes so we
+        // pick up the new URL/password on the next loop iteration.
+        void OnSettingsChanged(string key)
         {
-            var settings = settingsMonitor.CurrentValue;
-            if (!settings.Enabled)
+            if (key == SettingKeys.Obs)
             {
-                await Task.Delay(1000, stoppingToken);
-                continue;
+                logger.LogInformation("OBS settings changed; recycling session.");
+                try { _sessionCts?.Cancel(); } catch { }
             }
+        }
 
-            try
+        using (var scope = scopeFactory.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ISettingsStore>();
+            store.Changed += OnSettingsChanged;
+        }
+
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await RunSessionAsync(settings, stoppingToken);
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "OBS session error; will reconnect in {Delay}ms.", settings.ReconnectDelayMs);
-            }
+                var settings = await LoadSettingsAsync(stoppingToken);
+                if (!settings.Enabled)
+                {
+                    await Task.Delay(1000, stoppingToken);
+                    continue;
+                }
 
-            _identified = false;
-            try { _socket?.Dispose(); } catch { }
-            _socket = null;
+                _sessionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                try
+                {
+                    await RunSessionAsync(settings, _sessionCts.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "OBS session error; will reconnect in {Delay}ms.", settings.ReconnectDelayMs);
+                }
 
-            try { await Task.Delay(Math.Max(500, settings.ReconnectDelayMs), stoppingToken); }
-            catch (OperationCanceledException) { break; }
+                _identified = false;
+                try { _socket?.Dispose(); } catch { }
+                _socket = null;
+                _sessionCts?.Dispose();
+                _sessionCts = null;
+
+                try { await Task.Delay(Math.Max(500, settings.ReconnectDelayMs), stoppingToken); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+        finally
+        {
+            // Static event — remove to avoid leaking across service lifetimes.
+            using var scope = scopeFactory.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<ISettingsStore>();
+            store.Changed -= OnSettingsChanged;
+        }
+    }
+
+    private async Task<ObsSettings> LoadSettingsAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<ISettingsStore>();
+            return await store.GetAsync(SettingKeys.Obs, bootstrapDefaults.Value, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to load OBS settings from store; using bootstrap defaults.");
+            return bootstrapDefaults.Value;
         }
     }
 

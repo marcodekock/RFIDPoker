@@ -11,6 +11,7 @@ namespace RFIDPoker.Api.Services;
 /// </summary>
 public class MissingCardsAutoFoldService(
     ITableStateManager tableState,
+    IBroadcastState broadcast,
     IOptions<RfidConfig> rfidOptions,
     ILogger<MissingCardsAutoFoldService> logger) : BackgroundService
 {
@@ -38,6 +39,8 @@ public class MissingCardsAutoFoldService(
 
     private void Tick()
     {
+        if (!broadcast.IsLive) return;
+
         var now = DateTimeOffset.UtcNow;
         // Snapshot so we can mutate without holding the manager's lock.
         var candidates = tableState.Players

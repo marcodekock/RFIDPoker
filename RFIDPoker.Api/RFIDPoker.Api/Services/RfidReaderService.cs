@@ -24,12 +24,15 @@ public interface IRfidReaderService
 /// </summary>
 public class RfidReaderService(
     IOptions<RfidConfig> options,
+    IRfidDeviceStore deviceStore,
     ITableStateManager tableState,
     ICardTagMapper cardMapper,
+    IBroadcastState broadcast,
     IHubContext<AnalysisHub> hubContext,
     ILogger<RfidReaderService> logger) : BackgroundService, IRfidReaderService
 {
     private readonly RfidConfig _config = options.Value;
+    private IReadOnlyList<DeviceConfig> Devices => deviceStore.Devices;
 
     // Key = "DeviceKey:AntennaIndex"; value = uid -> last-seen UTC timestamp.
     private readonly Dictionary<string, Dictionary<string, DateTime>> _tagsByAntenna =
@@ -67,7 +70,7 @@ public class RfidReaderService(
     {
         var currentTags = GetCurrentTagsByAntenna();
         var readings = new List<AntennaReadingDto>();
-        foreach (var device in _config.Devices)
+        foreach (var device in Devices)
         {
             var deviceKey = GetDeviceKey(device);
             foreach (var antenna in device.Antennas)
@@ -86,9 +89,36 @@ public class RfidReaderService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (_config.Devices.Count == 0)
+        // Runs until stoppingToken fires; internally restarts on device-store changes.
+        while (!stoppingToken.IsCancellationRequested)
         {
-            logger.LogWarning("Rfid:Devices is empty. Reader service will not connect to anything.");
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            Action onDevicesChanged = () =>
+            {
+                logger.LogInformation("RFID device layout changed \u2014 restarting reader loops.");
+                try { linked.Cancel(); } catch { /* already cancelled */ }
+            };
+            deviceStore.Changed += onDevicesChanged;
+            try
+            {
+                await RunAllAsync(linked.Token);
+            }
+            finally
+            {
+                deviceStore.Changed -= onDevicesChanged;
+            }
+            if (stoppingToken.IsCancellationRequested) break;
+            // Brief pause before rebuilding to let the DB write settle and avoid tight looping.
+            try { await Task.Delay(250, stoppingToken); } catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private async Task RunAllAsync(CancellationToken stoppingToken)
+    {
+        if (Devices.Count == 0)
+        {
+            logger.LogWarning("No RFID devices configured. Reader service is idle.");
+            try { await Task.Delay(Timeout.Infinite, stoppingToken); } catch (OperationCanceledException) { }
             return;
         }
 
@@ -98,9 +128,33 @@ public class RfidReaderService(
         tableState.HandReset += onHandReset;
         stoppingToken.Register(() => tableState.HandReset -= onHandReset);
 
+        // When broadcast stops, purge every tracked UID and push empty notifications
+        // so downstream state (community + seats) is cleared immediately instead of
+        // waiting for the natural tag-eviction timeout.
+        Action onBroadcast = () =>
+        {
+            if (broadcast.IsLive) return;
+            List<(DeviceConfig device, int antenna)> flushList = [];
+            lock (_tagsByAntenna)
+            {
+                _tagsByAntenna.Clear();
+            }
+            foreach (var d in Devices)
+            {
+                foreach (var a in d.Antennas)
+                {
+                    flushList.Add((d, a.AntennaIndex));
+                }
+            }
+            ResetCommunityLatch();
+            foreach (var (d, a) in flushList) NotifyIfChanged(d, a);
+        };
+        broadcast.Changed += onBroadcast;
+        stoppingToken.Register(() => broadcast.Changed -= onBroadcast);
+
         var evictionTask = Task.Run(() => EvictionLoopAsync(stoppingToken), stoppingToken);
 
-        var deviceTasks = _config.Devices
+        var deviceTasks = Devices
             .Select(d => Task.Run(() => RunDeviceLoopAsync(d, stoppingToken), stoppingToken))
             .ToArray();
 
@@ -190,6 +244,10 @@ public class RfidReaderService(
 
     private void TryHandleMessage(DeviceConfig device, string json)
     {
+        // Broadcast is the master switch: while off-air we ignore every UID so the
+        // HUD, analysis engine, and camera director see a totally cold table.
+        if (!broadcast.IsLive) return;
+
         PepperMessage? msg;
         try
         {
@@ -236,7 +294,7 @@ public class RfidReaderService(
     private async Task EvictionLoopAsync(CancellationToken ct)
     {
         // Precompute a lookup so eviction can resolve device+antenna without parsing keys.
-        var deviceByKey = _config.Devices.ToDictionary(GetDeviceKey, d => d, StringComparer.OrdinalIgnoreCase);
+        var deviceByKey = Devices.ToDictionary(GetDeviceKey, d => d, StringComparer.OrdinalIgnoreCase);
 
         while (!ct.IsCancellationRequested)
         {
@@ -383,7 +441,7 @@ public class RfidReaderService(
         // directly from tag storage — we have to preserve the previous board order below.
         var currentSet = new HashSet<Card>();
 
-        foreach (var device in _config.Devices)
+        foreach (var device in Devices)
         {
             var deviceKey = GetDeviceKey(device);
             foreach (var antenna in device.Antennas)

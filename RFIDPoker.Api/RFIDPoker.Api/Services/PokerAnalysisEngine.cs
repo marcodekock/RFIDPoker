@@ -16,6 +16,9 @@ public class PokerAnalysisEngine(
     ITournamentStateManager tournamentState,
     IHandEvaluator handEvaluator,
     IEquityCalculator equityCalculator,
+    IBroadcastState broadcast,
+    ITournamentDirectorState tournamentDirector,
+    IManualTournamentState manualTournament,
     IHubContext<AnalysisHub> hubContext,
     IOptions<RfidConfig> rfidOptions,
     ILogger<PokerAnalysisEngine> logger) : BackgroundService, IPokerAnalysisEngine
@@ -31,6 +34,9 @@ public class PokerAnalysisEngine(
     {
         tableState.StateChanged += OnStateChanged;
         tournamentState.StateChanged += OnStateChanged;
+        broadcast.Changed += OnStateChanged;
+        tournamentDirector.Changed += OnStateChanged;
+        manualTournament.Changed += OnStateChanged;
         return base.StartAsync(cancellationToken);
     }
 
@@ -38,6 +44,9 @@ public class PokerAnalysisEngine(
     {
         tableState.StateChanged -= OnStateChanged;
         tournamentState.StateChanged -= OnStateChanged;
+        broadcast.Changed -= OnStateChanged;
+        tournamentDirector.Changed -= OnStateChanged;
+        manualTournament.Changed -= OnStateChanged;
         return base.StopAsync(cancellationToken);
     }
 
@@ -98,15 +107,46 @@ public class PokerAnalysisEngine(
 
     private async Task RunAnalysisAsync(CancellationToken ct)
     {
+        // TD-driven overrides. When TD is enabled and has published a snapshot,
+        // blinds / break state / player-count are sourced from it and the operator's
+        // manual editors are ignored.
+        var td = BuildTournamentSnapshot();
+        var blindsOverride = td is not null ? FormatBlinds(td) : tableState.Blinds;
+        var breakOverride = BuildBreakOverride(td);
+        var isOnBreak = breakOverride?.IsActive == true || tournamentState.IsOnBreak;
+
+        // Master off-air switch: while broadcast is stopped, publish a cold snapshot
+        // (no cards, no players) so overlay + display look completely idle.
+        if (!broadcast.IsLive)
+        {
+            var offAir = new AnalysisResultDto
+            {
+                CurrentStreet = tableState.CurrentStreet,
+                Blinds = blindsOverride,
+                CommunityCards = [],
+                MuckedCards = [],
+                ActivePlayers = [],
+                FoldedPlayers = [],
+                ActivePlayerCount = 0,
+                HeadsUpOuts = null,
+                Break = null,
+                Tournament = td,
+                Timestamp = DateTimeOffset.UtcNow
+            };
+            _latestResult = offAir;
+            await hubContext.Clients.All.SendAsync("AnalysisUpdated", offAir, ct);
+            return;
+        }
+
         // While on break, freeze the table: publish an empty snapshot with the break
         // state so overlay/display hide cards and show the countdown.
-        if (tournamentState.IsOnBreak)
+        if (isOnBreak)
         {
-            var breakSnap = tournamentState.GetBreakSnapshot();
+            var breakSnap = breakOverride ?? tournamentState.GetBreakSnapshot();
             var breakResult = new AnalysisResultDto
             {
                 CurrentStreet = tableState.CurrentStreet,
-                Blinds = tableState.Blinds,
+                Blinds = blindsOverride,
                 CommunityCards = [],
                 MuckedCards = [],
                 ActivePlayers = tableState.Players
@@ -120,9 +160,10 @@ public class PokerAnalysisEngine(
                         IsFolded = false
                     }).ToList(),
                 FoldedPlayers = [],
-                ActivePlayerCount = 0,
+                ActivePlayerCount = td?.PlayersLeft ?? 0,
                 HeadsUpOuts = null,
                 Break = breakSnap,
+                Tournament = td,
                 Timestamp = DateTimeOffset.UtcNow
             };
             _latestResult = breakResult;
@@ -191,14 +232,15 @@ public class PokerAnalysisEngine(
         var interim = new AnalysisResultDto
         {
             CurrentStreet = street,
-            Blinds = tableState.Blinds,
+            Blinds = blindsOverride,
             CommunityCards = communityCards,
             MuckedCards = muckedCards,
             ActivePlayers = playerAnalyses,
             FoldedPlayers = foldedAnalyses,
-            ActivePlayerCount = activePlayers.Count,
+            ActivePlayerCount = td?.PlayersLeft ?? activePlayers.Count,
             HeadsUpOuts = headsUpOuts,
-            Break = tournamentState.GetBreakSnapshot(),
+            Break = breakOverride ?? tournamentState.GetBreakSnapshot(),
+            Tournament = td,
             Timestamp = DateTimeOffset.UtcNow
         };
         _latestResult = interim;
@@ -234,14 +276,15 @@ public class PokerAnalysisEngine(
         var result = new AnalysisResultDto
         {
             CurrentStreet = street,
-            Blinds = tableState.Blinds,
+            Blinds = blindsOverride,
             CommunityCards = communityCards,
             MuckedCards = muckedCards,
             ActivePlayers = playerAnalyses,
             FoldedPlayers = foldedAnalyses,
-            ActivePlayerCount = activePlayers.Count,
+            ActivePlayerCount = td?.PlayersLeft ?? activePlayers.Count,
             HeadsUpOuts = headsUpOuts,
-            Break = tournamentState.GetBreakSnapshot(),
+            Break = breakOverride ?? tournamentState.GetBreakSnapshot(),
+            Tournament = td,
             Timestamp = DateTimeOffset.UtcNow
         };
 
@@ -319,6 +362,95 @@ public class PokerAnalysisEngine(
             SeatNumber = behind.SeatNumber,
             PlayerName = behind.Name,
             Outs = outs
+        };
+    }
+
+    /// <summary>
+    /// Builds the TD snapshot DTO from the latest webhook payload, computing avg stack
+    /// (TD sends total chips in <c>ChipCount</c>). Returns null when TD is disabled or
+    /// no payload has been received yet.
+    /// </summary>
+    private TournamentDirectorSnapshotDto? BuildTournamentSnapshot()
+    {
+        if (tournamentDirector.IsEnabled)
+        {
+            var u = tournamentDirector.Latest;
+            if (u is null) return BuildManualSnapshot();
+
+            var players = Math.Max(0, u.PlayersLeft);
+            var avg = players > 0 ? u.ChipCount / players : 0L;
+
+            return new TournamentDirectorSnapshotDto
+            {
+                Level = u.Level,
+                PlayersLeft = players,
+                TotalChips = u.ChipCount,
+                AverageStack = avg,
+                SmallBlind = u.SmallBlind,
+                BigBlind = u.BigBlind,
+                NextSmallBlind = u.NextSmallBlind,
+                NextBigBlind = u.NextBigBlind,
+                IsBreak = u.IsBreak == 1,
+                NextIsBreak = u.NextIsBreak == 1,
+                SecondsLeft = u.SecondsLeft,
+                LevelDuration = u.LevelDuration,
+                ClockPaused = u.ClockPaused == 1,
+                ReceivedAtUtc = tournamentDirector.LastUpdatedUtc ?? DateTimeOffset.UtcNow
+            };
+        }
+
+        return BuildManualSnapshot();
+    }
+
+    private TournamentDirectorSnapshotDto? BuildManualSnapshot()
+    {
+        var m = manualTournament.Current;
+        if (m is null || !m.HasAny) return null;
+
+        var players = Math.Max(0, m.PlayersLeft);
+        var avg = players > 0 && m.TotalChips > 0 ? m.TotalChips / players : 0L;
+
+        return new TournamentDirectorSnapshotDto
+        {
+            Level = m.Level,
+            PlayersLeft = players,
+            TotalChips = m.TotalChips,
+            AverageStack = avg,
+            SmallBlind = m.SmallBlind,
+            BigBlind = m.BigBlind,
+            NextSmallBlind = m.NextSmallBlind,
+            NextBigBlind = m.NextBigBlind,
+            IsBreak = false,
+            NextIsBreak = false,
+            SecondsLeft = 0,
+            LevelDuration = 0,
+            ClockPaused = false,
+            ReceivedAtUtc = DateTimeOffset.UtcNow
+        };
+    }
+
+    private static string? FormatBlinds(TournamentDirectorSnapshotDto td)
+    {
+        if (td.SmallBlind <= 0 && td.BigBlind <= 0) return null;
+        return $"{td.SmallBlind:N0} / {td.BigBlind:N0}";
+    }
+
+    /// <summary>
+    /// Synthesizes a BreakStateDto from the TD payload when TD is on break, so the
+    /// existing overlay/display break UI just works. Returns null when TD isn't
+    /// signalling a break — the manual break state stays in charge.
+    /// </summary>
+    private static BreakStateDto? BuildBreakOverride(TournamentDirectorSnapshotDto? td)
+    {
+        if (td is null || !td.IsBreak) return null;
+        return new BreakStateDto
+        {
+            IsActive = true,
+            IsPaused = td.ClockPaused,
+            Label = "Break",
+            TotalSeconds = Math.Max(td.LevelDuration, td.SecondsLeft),
+            RemainingSeconds = Math.Max(0, td.SecondsLeft),
+            ServerNowUtc = DateTimeOffset.UtcNow
         };
     }
 
