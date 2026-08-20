@@ -19,6 +19,7 @@ import { AuthService } from './services/auth.service';
           <a routerLink="/config" routerLinkActive="active">Config</a>
           <a *ngIf="auth.isAdmin()" routerLink="/admin/users" routerLinkActive="active">Users</a>
           <a *ngIf="auth.isAdmin()" routerLink="/admin/overlay-token" routerLinkActive="active">Overlay Token</a>
+          <a *ngIf="auth.isAdmin()" routerLink="/admin/cameras" routerLinkActive="active">Cameras</a>
           <a (click)="logout()" style="cursor:pointer">Sign out</a>
         </nav>
       </header>

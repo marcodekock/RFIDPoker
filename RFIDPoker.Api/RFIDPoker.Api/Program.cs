@@ -165,7 +165,12 @@ builder.Services.AddAuthorization(options =>
 });
 
 // ---- App services -----------------------------------------------------------
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(o =>
+    {
+        o.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter());
+    });
 builder.Services.AddOpenApi();
 builder.Services.AddSignalR();
 builder.Services.AddCors(options =>
@@ -196,6 +201,17 @@ builder.Services.AddSingleton<IRfidReaderService>(sp => sp.GetRequiredService<Rf
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RfidReaderService>());
 builder.Services.AddHostedService<IdleHandResetService>();
 builder.Services.AddHostedService<MissingCardsAutoFoldService>();
+
+// --- OBS camera director ----------------------------------------------------
+builder.Services.Configure<RFIDPoker.Api.Models.ObsSettings>(
+    builder.Configuration.GetSection(RFIDPoker.Api.Models.ObsSettings.SectionName));
+builder.Services.AddScoped<ICameraRepository, CameraRepository>();
+builder.Services.AddSingleton<ObsClient>();
+builder.Services.AddSingleton<IObsClient>(sp => sp.GetRequiredService<ObsClient>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ObsClient>());
+builder.Services.AddSingleton<CameraDirectorService>();
+builder.Services.AddSingleton<ICameraDirector>(sp => sp.GetRequiredService<CameraDirectorService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraDirectorService>());
 
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IOverlayTokenService, OverlayTokenService>();

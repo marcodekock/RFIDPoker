@@ -7,6 +7,7 @@ import { LoginComponent } from './login/login.component';
 import { SetupComponent } from './setup/setup.component';
 import { UsersComponent } from './admin/users.component';
 import { OverlayTokenComponent } from './admin/overlay-token.component';
+import { CamerasComponent } from './admin/cameras.component';
 import { authGuard, adminGuard } from './services/auth.guards';
 
 export const routes: Routes = [
@@ -20,5 +21,6 @@ export const routes: Routes = [
   { path: 'config', component: ConfigComponent, canActivate: [authGuard] },
   { path: 'manage', component: ManageComponent, canActivate: [authGuard] },
   { path: 'admin/users', component: UsersComponent, canActivate: [adminGuard] },
-  { path: 'admin/overlay-token', component: OverlayTokenComponent, canActivate: [adminGuard] }
+  { path: 'admin/overlay-token', component: OverlayTokenComponent, canActivate: [adminGuard] },
+  { path: 'admin/cameras', component: CamerasComponent, canActivate: [adminGuard] }
 ];

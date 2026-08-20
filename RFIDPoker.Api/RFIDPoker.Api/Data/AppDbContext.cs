@@ -11,6 +11,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 {
     public DbSet<CardMappingEntity> CardMappings => Set<CardMappingEntity>();
     public DbSet<OverlayToken> OverlayTokens => Set<OverlayToken>();
+    public DbSet<Camera> Cameras => Set<Camera>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -29,6 +30,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         {
             e.HasIndex(t => t.TokenHash).IsUnique();
             e.Property(t => t.TokenHash).HasMaxLength(128).IsRequired();
+        });
+
+        modelBuilder.Entity<Camera>(e =>
+        {
+            e.ToTable("Cameras");
+            e.HasKey(c => c.Id);
+            e.Property(c => c.Name).HasMaxLength(128).IsRequired();
+            e.Property(c => c.ObsSceneName).HasMaxLength(128).IsRequired();
+            e.Property(c => c.Role).HasConversion<string>().HasMaxLength(16);
         });
     }
 }
