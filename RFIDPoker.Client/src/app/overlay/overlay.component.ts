@@ -227,7 +227,7 @@ import {
     .street {
       font-size: 0.7rem;
       letter-spacing: 0.18em;
-      color: #e6e9f0;
+      color: #ffffff;
       text-transform: uppercase;
       font-weight: 700;
       opacity: 0.85;
