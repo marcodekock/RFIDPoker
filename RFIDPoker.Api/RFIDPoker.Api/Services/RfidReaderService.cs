@@ -47,8 +47,11 @@ public class RfidReaderService(
     // CardLatchOffMs (or the hand is reset via NewHand).
     private readonly Lock _communityLatchLock = new();
     private List<Card> _latchedCommunity = [];
-    private HashSet<Card> _lastCommunitySnapshot = [];
-    private DateTimeOffset? _communityStableSince;
+    // Per-card presence tracker: when a community card was first continuously seen.
+    // A card is added to _latchedCommunity once its presence duration reaches
+    // CardLatchOnMs. Entries are cleared when the card disappears from the physical
+    // board (before it becomes latched) or when the whole latch is released.
+    private readonly Dictionary<Card, DateTimeOffset> _cardPresentSince = new();
     private DateTimeOffset? _communityAbsentSince;
 
     // Set when a hand with a real board (>= 3 community cards) has its board cleared
@@ -56,6 +59,13 @@ public class RfidReaderService(
     // NewHand() call until those hole cards also leave so the overlay doesn't blank
     // out while players are still holding the previous hand. Cleared on NewHand().
     private bool _pendingNewHand;
+
+    // Timestamp of the first eviction tick that observed a fully-empty physical table
+    // while stale state was still around. Reset the moment anything reappears. The
+    // full-table clearance fast path only fires once this has persisted long enough to
+    // rule out a transient reader stall (see FullTableClearanceMs below).
+    private DateTimeOffset? _fullClearanceSince;
+    private static readonly TimeSpan FullTableClearanceMs = TimeSpan.FromMilliseconds(1500);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -352,6 +362,33 @@ public class RfidReaderService(
     /// </summary>
     private void CheckLatchReleaseAndPendingNewHand()
     {
+        // Full-table physical-clearance fast path. If the entire table (board + every
+        // unfolded seat antenna) has been continuously empty for FullTableClearanceMs
+        // while stale state is still around, treat it as a deliberate sweep and reset
+        // immediately instead of waiting out CardLatchOffMs. Must be sustained across
+        // multiple ticks so a transient reader stall doesn't cause a flicker-reset.
+        var hasStaleState = tableState.ActiveDeckId is not null
+            && (tableState.CommunityCards.Count > 0 || _latchedCommunity.Count > 0 || _pendingNewHand);
+        if (hasStaleState
+            && CollectPhysicalCommunitySet().Count == 0
+            && !AnySeatAntennaHasTags())
+        {
+            var nowClearance = DateTimeOffset.UtcNow;
+            _fullClearanceSince ??= nowClearance;
+            if (nowClearance - _fullClearanceSince.Value >= FullTableClearanceMs)
+            {
+                logger.LogInformation("Full-table clearance sustained for {Ms}ms; resetting hand.", FullTableClearanceMs.TotalMilliseconds);
+                _fullClearanceSince = null;
+                ResetCommunityLatch();
+                tableState.NewHand();
+                return;
+            }
+        }
+        else
+        {
+            _fullClearanceSince = null;
+        }
+
         var latchOff = TimeSpan.FromMilliseconds(Math.Max(0, _config.CardLatchOffMs));
         var now = DateTimeOffset.UtcNow;
         bool latchJustReleased = false;
@@ -364,8 +401,7 @@ public class RfidReaderService(
             {
                 _latchedCommunity.Clear();
                 _communityAbsentSince = null;
-                _communityStableSince = null;
-                _lastCommunitySnapshot.Clear();
+                _cardPresentSince.Clear();
                 latchJustReleased = true;
             }
         }
@@ -556,24 +592,13 @@ public class RfidReaderService(
         }
     }
 
-    private void UpdateCommunityCards()
+    /// <summary>
+    /// Collects the set of resolvable cards currently present on any Flop or TurnRiver
+    /// antenna, honoring the active deck lock.
+    /// </summary>
+    private HashSet<Card> CollectPhysicalCommunitySet()
     {
-        // Community cards only track when the table is "hot" — i.e. hole cards have
-        // been dealt and the deck lock is set. Without that, we could be reading the
-        // dealer shuffling / staging on the felt, or leftover cards from a previous
-        // hand still near the board antenna. Bail out and clear any stale board state.
-        if (tableState.ActiveDeckId is null)
-        {
-            if (tableState.CommunityCards.Count > 0)
-                tableState.SetCommunityCards([]);
-            return;
-        }
-
-        // Collect the current set of cards present on any board antenna (flop pair + turn/river).
-        // We iterate antennas and (unordered) tag sets, so we can't derive the visual order
-        // directly from tag storage — we have to preserve the previous board order below.
         var currentSet = new HashSet<Card>();
-
         foreach (var device in Devices)
         {
             var deviceKey = GetDeviceKey(device);
@@ -595,8 +620,6 @@ public class RfidReaderService(
                 {
                     var card = cardMapper.GetCard(tagId);
                     if (card is null) continue;
-                    // Honor the deck lock: reject tags from other decks so a stray
-                    // read from the "off" deck can't add a phantom board card.
                     if (tableState.ActiveDeckId is int locked
                         && cardMapper.GetDeckId(tagId) is int deckId
                         && deckId != locked) continue;
@@ -604,6 +627,52 @@ public class RfidReaderService(
                 }
             }
         }
+        return currentSet;
+    }
+
+    /// <summary>
+    /// True when at least one seat antenna currently has any tag physically present
+    /// (regardless of whether it resolves to a card / matches the deck lock). Used to
+    /// distinguish a full-table sweep from a board-only flicker.
+    /// </summary>
+    private bool AnySeatAntennaHasTags()
+    {
+        foreach (var device in Devices)
+        {
+            var deviceKey = GetDeviceKey(device);
+            foreach (var antenna in device.Antennas)
+            {
+                if (antenna.Function != AntennaFunction.PlayerSeat) continue;
+                var seat = tableState.Players.FirstOrDefault(p => p.SeatNumber == antenna.SeatNumber);
+                if (seat is not null && seat.IsFolded) continue;
+                var key = MakeKey(deviceKey, antenna.AntennaIndex);
+                lock (_tagsByAntenna)
+                {
+                    if (_tagsByAntenna.TryGetValue(key, out var t) && t.Count > 0)
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void UpdateCommunityCards()
+    {
+        // Community cards only track when the table is "hot" — i.e. hole cards have
+        // been dealt and the deck lock is set. Without that, we could be reading the
+        // dealer shuffling / staging on the felt, or leftover cards from a previous
+        // hand still near the board antenna. Bail out and clear any stale board state.
+        if (tableState.ActiveDeckId is null)
+        {
+            if (tableState.CommunityCards.Count > 0)
+                tableState.SetCommunityCards([]);
+            return;
+        }
+
+        // Collect the current set of cards present on any board antenna (flop pair + turn/river).
+        // We iterate antennas and (unordered) tag sets, so we can't derive the visual order
+        // directly from tag storage — we have to preserve the previous board order below.
+        var currentSet = CollectPhysicalCommunitySet();
 
         // Rebuild the board preserving the existing order: cards that were already on the
         // board keep their slot; brand-new cards get appended at the end. This is what
@@ -677,38 +746,37 @@ public class RfidReaderService(
 
         lock (_communityLatchLock)
         {
-            // Stability tracker: same non-trivial set seen continuously => arm latch.
-            var sameAsLast = currentSet.SetEquals(_lastCommunitySnapshot);
-            if (!sameAsLast)
+            // Per-card presence tracking: any card physically present for CardLatchOnMs
+            // gets individually latched. This means the flop latches ~2s after being
+            // spread, the turn latches ~2s after landing (without needing the whole
+            // board to be stable again), and likewise the river.
+            foreach (var card in currentSet)
             {
-                _lastCommunitySnapshot = new HashSet<Card>(currentSet);
-                _communityStableSince = currentSet.Count >= 3 ? now : null;
-            }
-            else if (currentSet.Count >= 3)
-            {
-                _communityStableSince ??= now;
-            }
-            else
-            {
-                _communityStableSince = null;
-            }
-
-            if (_communityStableSince.HasValue
-                && currentSet.Count >= 3
-                && now - _communityStableSince.Value >= latchOn)
-            {
-                // Grow the latch to whatever's currently stable — a stable turn card
-                // stacks on top of a previously latched flop, etc.
-                foreach (var c in communityCards)
+                if (_latchedCommunity.Contains(card)) continue;
+                if (!_cardPresentSince.TryGetValue(card, out var since))
                 {
-                    if (!_latchedCommunity.Contains(c)) _latchedCommunity.Add(c);
+                    _cardPresentSince[card] = now;
+                    continue;
                 }
+                if (now - since >= latchOn)
+                {
+                    _latchedCommunity.Add(card);
+                    _cardPresentSince.Remove(card);
+                }
+            }
+            // Cards that disappeared before crossing the latch threshold: forget them
+            // so a brief flicker doesn't count as continuous presence next time.
+            if (_cardPresentSince.Count > 0)
+            {
+                var stale = _cardPresentSince.Keys.Where(c => !currentSet.Contains(c)).ToList();
+                foreach (var c in stale) _cardPresentSince.Remove(c);
             }
 
             if (_latchedCommunity.Count == 0) return;
 
-            // Absence tracking: as long as *any* latched card is still on the board,
-            // the latch is considered present. Only sustained full absence releases it.
+            // Absence tracking: latch is released only when EVERY latched card has been
+            // continuously absent for CardLatchOffMs. Any latched card still on the
+            // board keeps the whole latch alive.
             var anyLatchedPresent = _latchedCommunity.Any(currentSet.Contains);
             if (anyLatchedPresent)
             {
@@ -720,8 +788,8 @@ public class RfidReaderService(
                 if (now - _communityAbsentSince.Value >= latchOff)
                 {
                     _latchedCommunity.Clear();
+                    _cardPresentSince.Clear();
                     _communityAbsentSince = null;
-                    _communityStableSince = null;
                     return;
                 }
             }
@@ -748,8 +816,7 @@ public class RfidReaderService(
         lock (_communityLatchLock)
         {
             _latchedCommunity.Clear();
-            _lastCommunitySnapshot.Clear();
-            _communityStableSince = null;
+            _cardPresentSince.Clear();
             _communityAbsentSince = null;
             _pendingNewHand = false;
         }
@@ -767,12 +834,14 @@ public class RfidReaderService(
         {
             lock (_communityLatchLock)
             {
-                foreach (var c in muckedCards) _latchedCommunity.Remove(c);
+                foreach (var c in muckedCards)
+                {
+                    _latchedCommunity.Remove(c);
+                    _cardPresentSince.Remove(c);
+                }
                 if (_latchedCommunity.Count == 0)
                 {
                     _communityAbsentSince = null;
-                    _communityStableSince = null;
-                    _lastCommunitySnapshot.Clear();
                 }
             }
         }

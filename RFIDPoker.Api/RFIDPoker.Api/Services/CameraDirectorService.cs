@@ -187,18 +187,21 @@ public class CameraDirectorService(
     }
 
     /// <summary>
-    /// A hand is "in progress" iff there is at least one non-folded player and every
-    /// non-folded player that has been dealt any card holds exactly 2 hole cards.
-    /// Uses the latched pair so brief RFID drops don't kick us off the main camera.
+    /// A hand is considered "in progress" (main camera live) once the flop has been
+    /// dealt. Pre-flop stays on the secondary rotation. Also requires at least one
+    /// non-folded player still holding cards, so an end-of-hand board sitting on the
+    /// felt with no live players doesn't hold the main camera.
     /// </summary>
     private bool IsHandInProgress()
     {
+        if (tableState.CommunityCards.Count < 3) return false;
+
         var active = tableState.Players.Where(p => !p.IsFolded).ToList();
         if (active.Count == 0) return false;
 
-        var dealtIn = active.Where(p => p.HoleCards.Count > 0 || p.DealtThisHand.Count > 0).ToList();
-        if (dealtIn.Count == 0) return false;
-
-        return dealtIn.All(p => (p.LatchedHoleCards?.Count ?? p.HoleCards.Count) == 2);
+        return active.Any(p =>
+            p.HoleCards.Count > 0
+            || (p.LatchedHoleCards?.Count ?? 0) > 0
+            || p.DealtThisHand.Count > 0);
     }
 }

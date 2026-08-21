@@ -229,12 +229,28 @@ public class TableStateManager : ITableStateManager
                 }
                 else
                 {
-                    // No latch (or the single card doesn't belong to it): fall back
-                    // to legacy behavior — reset stability timer and reflect raw state.
-                    player.HoleCardsStableSince = null;
-                    player.CardsMissingSince = null;
-                    player.HoleCards = cards;
-                    foreach (var c in cards) player.DealtThisHand.Add(c);
+                    // No latch yet. Fall back to DealtThisHand: if the seat was already
+                    // dealt two cards this hand and the visible one is among them,
+                    // preserve the other so mid-hand removal of a single card doesn't
+                    // render an incomplete hand while we wait for the muck event.
+                    var visible = cards[0];
+                    var partner = player.DealtThisHand.FirstOrDefault(c => !c.Equals(visible));
+                    if (player.DealtThisHand.Count >= 2
+                        && player.DealtThisHand.Contains(visible)
+                        && partner is not null)
+                    {
+                        player.CardsMissingSince ??= now;
+                        player.HoleCards = new List<Card> { visible, partner };
+                        player.DealtThisHand.Add(visible);
+                    }
+                    else
+                    {
+                        // Genuinely a lone card (fresh deal in progress): reflect raw state.
+                        player.HoleCardsStableSince = null;
+                        player.CardsMissingSince = null;
+                        player.HoleCards = cards;
+                        foreach (var c in cards) player.DealtThisHand.Add(c);
+                    }
                 }
             }
             else // cards.Count == 0

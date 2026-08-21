@@ -56,7 +56,7 @@ interface CardStep { rank: number; suit: number; }
             <div class="progress-bar"><div class="progress-fill" [style.width.%]="progressPct()"></div></div>
           </div>
 
-          <div class="card-display" [class.red]="isRed(currentCard().suit)">
+          <div class="speed-card-display" [class.red]="isRed(currentCard().suit)">
             <div class="card-rank">{{ rankLabel(currentCard().rank) }}</div>
             <div class="card-suit">{{ suitSymbol(currentCard().suit) }}</div>
             <div class="card-name">{{ rankLabel(currentCard().rank) }} of {{ suitName(currentCard().suit) }}</div>
@@ -117,20 +117,21 @@ interface CardStep { rank: number; suit: number; }
     .progress-bar { height: 8px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; }
     .progress-fill { height: 100%; background: #27ae60; transition: width 0.2s; }
 
-    .card-display {
+    .speed-card-display {
       background: #fdfdfd; color: #111; border-radius: 12px;
-      padding: 1rem; text-align: center;
+      padding: 1.25rem 1rem; text-align: center;
       box-shadow: inset 0 0 0 3px #ddd, 0 6px 20px rgba(0,0,0,0.5);
       user-select: none;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       overflow: hidden;
-      max-height: 55vh;
+      width: 100%; min-height: 220px; max-height: 55vh;
+      box-sizing: border-box;
     }
-    .card-display.red { color: #c81a2b; }
-    .card-rank { font-size: 3rem; line-height: 1; font-weight: 800; }
-    .card-suit { font-size: 4rem; line-height: 1; margin: 0.25rem 0; }
-    .card-name { font-size: 0.95rem; color: #333; letter-spacing: 0.05em; text-transform: uppercase; margin-top: 0.25rem; }
-    .card-display.red .card-name { color: #7a1220; }
+    .speed-card-display.red { color: #c81a2b; }
+    .speed-card-display .card-rank { font-size: 3rem; line-height: 1; font-weight: 800; }
+    .speed-card-display .card-suit { font-size: 4rem; line-height: 1; margin: 0.25rem 0; }
+    .speed-card-display .card-name { font-size: 0.95rem; color: #333; letter-spacing: 0.05em; text-transform: uppercase; margin-top: 0.25rem; }
+    .speed-card-display.red .card-name { color: #7a1220; }
 
     .status { text-align: center; margin: 0.75rem 0 0; min-height: 1.5em; color: #aaa; }
     .pulse { animation: pulseFade 1.4s ease-in-out infinite; }
