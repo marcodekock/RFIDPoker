@@ -5,12 +5,14 @@ import { Subscription } from 'rxjs';
 import { ToastrService } from 'ngx-toastr';
 import { CalibrationService } from '../services/calibration.service';
 import { RfidDevicesService, RfidDeviceConfig, AntennaFunction } from '../services/rfid-devices.service';
+import { DecksService, Deck } from '../services/decks.service';
 import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
+import { SpeedScanModalComponent } from './speed-scan-modal.component';
 
 @Component({
   selector: 'app-config',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, SpeedScanModalComponent],
   template: `
     <div class="config-container">
       <h1>RFID Hardware</h1>
@@ -95,8 +97,66 @@ import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
         </div>
       </section>
 
+      <h1>Card Decks</h1>
+      <p class="subtitle">Enable one or more decks; the runtime tag&nbsp;&rarr;&nbsp;card lookup uses the union of every enabled deck.</p>
+
+      <section class="decks-section">
+        <div class="decks-toolbar">
+          <input type="text" [(ngModel)]="newDeckName" placeholder="New deck name" (keydown.enter)="createDeck()" />
+          <button class="primary" (click)="createDeck()" [disabled]="!newDeckName.trim()">+ Add Deck</button>
+          <button (click)="reloadDecks()">Reload</button>
+        </div>
+
+        <table class="decks-table" *ngIf="decks.length > 0">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Mapped Cards</th>
+              <th>Enabled</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let deck of decks" [class.active]="deck.isEnabled">
+              <td>
+                <input *ngIf="editingDeckId === deck.id" type="text" [(ngModel)]="editingDeckName"
+                       (keydown.enter)="commitDeckRename(deck)" (keydown.escape)="cancelDeckRename()" />
+                <span *ngIf="editingDeckId !== deck.id">{{ deck.name }}</span>
+              </td>
+              <td>{{ deck.mappingCount }} / 52</td>
+              <td>
+                <label class="toggle">
+                  <input type="checkbox" [checked]="deck.isEnabled" (change)="toggleDeckEnabled(deck, $event)" />
+                </label>
+              </td>
+              <td class="deck-actions">
+                <ng-container *ngIf="editingDeckId !== deck.id">
+                  <button (click)="startDeckRename(deck)">Rename</button>
+                  <button class="danger small" (click)="deleteDeck(deck)"
+                          [disabled]="decks.length <= 1" title="Delete deck">✕</button>
+                </ng-container>
+                <ng-container *ngIf="editingDeckId === deck.id">
+                  <button class="primary" (click)="commitDeckRename(deck)">Save</button>
+                  <button (click)="cancelDeckRename()">Cancel</button>
+                </ng-container>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
       <h1>Card Calibration</h1>
-      <p class="subtitle">Place a single card on an antenna to scan its RFID tag, then assign it to a playing card.</p>
+      <p class="subtitle">Pick a deck to scan into, then place a card on any antenna and assign it. Use <b>Speed Scan</b> to walk the whole deck in order.</p>
+
+      <section class="scan-target">
+        <label>Scan target deck:
+          <select [(ngModel)]="scanTargetDeckId">
+            <option [ngValue]="null" disabled>Select deck&hellip;</option>
+            <option *ngFor="let d of decks" [ngValue]="d.id">{{ d.name }} ({{ d.mappingCount }}/52)</option>
+          </select>
+        </label>
+        <button class="primary" (click)="openSpeedScan()">⚡ Speed Scan</button>
+      </section>
 
       <section class="scan-section">
         <h2>Live Antenna Readings</h2>
@@ -109,7 +169,7 @@ import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
             </div>
             <div *ngFor="let tag of reading.tagIds" class="tag-row">
               <code>{{ tag }}</code>
-              <button *ngIf="!isMapped(tag)" (click)="startMapping(tag)">Assign</button>
+              <button *ngIf="!isMapped(tag)" (click)="startMapping(tag)" [disabled]="scanTargetDeckId == null">Assign</button>
               <span *ngIf="isMapped(tag)" class="mapped">✓ {{ getMappedLabel(tag) }}</span>
             </div>
             <div *ngIf="reading.tagIds.length === 0" class="no-tags">No cards detected</div>
@@ -136,22 +196,28 @@ import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
       </section>
 
       <section class="mappings-section">
-        <h2>Current Mappings ({{ mappings.length }} / 52)</h2>
+        <h2>Current Mappings for {{ scanTargetDeckName() || 'selected deck' }} ({{ filteredMappings().length }} / 52)</h2>
         <table>
           <thead>
-            <tr><th>Tag ID</th><th>Card</th><th></th></tr>
+            <tr><th>Deck</th><th>Tag ID</th><th>Card</th><th></th></tr>
           </thead>
           <tbody>
-            <tr *ngFor="let m of mappings">
+            <tr *ngFor="let m of filteredMappings()">
+              <td>{{ m.deckName }}</td>
               <td><code>{{ m.tagId }}</code></td>
               <td>{{ getRankName(m.rank) }} of {{ getSuitName(m.suit) }}</td>
-              <td><button (click)="deleteMapping(m.tagId)">✕</button></td>
+              <td><button (click)="deleteMapping(m)">✕</button></td>
             </tr>
           </tbody>
         </table>
       </section>
-    </div>
-  `,
+        <app-speed-scan-modal *ngIf="showSpeedScan"
+          [existingDecks]="decks"
+          [defaultDeckId]="scanTargetDeckId"
+          (close)="onSpeedScanClosed()"
+          (completed)="onSpeedScanCompleted()"></app-speed-scan-modal>
+      </div>
+    `,
   styles: [`
     .config-container { padding: 1rem; }
     h1 { color: #e94560; margin-bottom: 0.25rem; }
@@ -192,6 +258,23 @@ import { AntennaReading, CardMapping, RANK_NAMES, SUIT_NAMES } from '../models';
     .danger:hover { background: #6a1a30; }
     .danger.small { padding: 0.2rem 0.5rem; font-size: 0.8rem; }
     .dim { color: #555; }
+    .decks-toolbar { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .decks-toolbar input { padding: 0.4rem 0.6rem; background: #0a0a1a; color: #eee; border: 1px solid #0f3460; border-radius: 4px; min-width: 220px; }
+    .decks-toolbar .primary { background: #e94560; border-color: #e94560; color: #fff; }
+    .decks-toolbar .primary:hover:not([disabled]) { background: #c8354e; }
+    .decks-table { width: 100%; border-collapse: collapse; background: #16213e; border: 1px solid #0f3460; border-radius: 6px; overflow: hidden; }
+    .decks-table th, .decks-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #0f3460; text-align: left; }
+    .decks-table th { color: #888; font-size: 0.75rem; text-transform: uppercase; }
+    .decks-table tr.active { background: rgba(233, 69, 96, 0.08); }
+    .decks-table input[type=text] { padding: 0.3rem 0.5rem; background: #0a0a1a; color: #eee; border: 1px solid #0f3460; border-radius: 4px; }
+    .badge-active { background: #27ae60; color: #fff; border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; font-weight: 600; }
+    .toggle input { transform: scale(1.3); cursor: pointer; }
+    .scan-target { display: flex; gap: 0.75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
+    .scan-target label { display: flex; flex-direction: column; gap: 4px; color: #aaa; font-size: 0.8rem; }
+    .scan-target select { padding: 0.4rem 0.6rem; background: #0a0a1a; color: #eee; border: 1px solid #0f3460; border-radius: 4px; min-width: 220px; }
+    .scan-target .primary { background: #e94560; border-color: #e94560; color: #fff; }
+    .scan-target .primary:hover { background: #c8354e; }
+    .deck-actions { display: flex; gap: 0.35rem; justify-content: flex-end; }
     .antenna-table tr.active td { background: rgba(46, 204, 113, 0.08); }
     .live-indicator { display: inline-flex; align-items: center; gap: 6px; color: #666; font-variant-numeric: tabular-nums; }
     .live-indicator .dot { width: 10px; height: 10px; border-radius: 50%; background: #333; box-shadow: none; transition: background 0.15s, box-shadow 0.15s; }
@@ -210,6 +293,13 @@ export class ConfigComponent implements OnInit {
   devices: RfidDeviceConfig[] = [];
   savingDevices = false;
 
+  decks: Deck[] = [];
+  newDeckName = '';
+  editingDeckId: number | null = null;
+  editingDeckName = '';
+  scanTargetDeckId: number | null = null;
+  showSpeedScan = false;
+
   ranks = Object.entries(RANK_NAMES).map(([v, l]) => ({ value: +v, label: l }));
   suits = Object.entries(SUIT_NAMES).map(([v, l]) => ({ value: +v, label: l }));
 
@@ -219,12 +309,14 @@ export class ConfigComponent implements OnInit {
   constructor(
     private calibrationService: CalibrationService,
     private rfidDevices: RfidDevicesService,
+    private decksService: DecksService,
     private toastr: ToastrService
   ) {}
 
   ngOnInit(): void {
     this.loadMappings();
     this.reloadDevices();
+    this.reloadDecks();
     this.readingsSub = this.calibrationService.readings$.subscribe(r => this.readings = r);
     this.calibrationService.refreshReadings();
   }
@@ -263,23 +355,57 @@ export class ConfigComponent implements OnInit {
   }
 
   saveMapping(): void {
-    if (!this.assigningTag) return;
-    this.calibrationService.registerMapping(this.assigningTag, this.selectedRank, this.selectedSuit).subscribe({
+    if (!this.assigningTag || this.scanTargetDeckId == null) return;
+    this.calibrationService.registerMapping(this.scanTargetDeckId, this.assigningTag, this.selectedRank, this.selectedSuit).subscribe({
       next: () => {
         this.assigningTag = null;
         this.loadMappings();
-      }
+        this.reloadDecks();
+      },
+      error: err => this.toastr.error(err?.error ?? 'Failed to assign tag.')
     });
   }
 
-  deleteMapping(tagId: string): void {
-    this.calibrationService.deleteMapping(tagId).subscribe({
-      next: () => this.loadMappings()
+  deleteMapping(m: CardMapping): void {
+    this.calibrationService.deleteMapping(m.deckId, m.tagId).subscribe({
+      next: () => { this.loadMappings(); this.reloadDecks(); }
+    });
+  }
+
+  openSpeedScan(): void { this.showSpeedScan = true; }
+
+  onSpeedScanClosed(): void {
+    this.showSpeedScan = false;
+    this.loadMappings();
+    this.reloadDecks();
+  }
+
+  onSpeedScanCompleted(): void {
+    this.toastr.success('Deck complete!');
+  }
+
+  toggleDeckEnabled(deck: Deck, ev: Event): void {
+    const isEnabled = (ev.target as HTMLInputElement).checked;
+    this.decksService.setEnabled(deck.id, isEnabled).subscribe({
+      next: () => { deck.isEnabled = isEnabled; this.loadMappings(); },
+      error: () => {
+        (ev.target as HTMLInputElement).checked = deck.isEnabled;
+        this.toastr.error('Failed to update deck.');
+      }
     });
   }
 
   getRankName(rank: number): string { return RANK_NAMES[rank] ?? '?'; }
   getSuitName(suit: number): string { return SUIT_NAMES[suit] ?? '?'; }
+
+  filteredMappings(): CardMapping[] {
+    if (this.scanTargetDeckId == null) return this.mappings;
+    return this.mappings.filter(m => m.deckId === this.scanTargetDeckId);
+  }
+
+  scanTargetDeckName(): string {
+    return this.decks.find(d => d.id === this.scanTargetDeckId)?.name ?? '';
+  }
 
   // ---- RFID device layout -------------------------------------------------
 
@@ -353,6 +479,72 @@ export class ConfigComponent implements OnInit {
         const msg = err?.error?.errors?.join('\n') ?? err?.error ?? 'Failed to save RFID layout.';
         this.toastr.error(typeof msg === 'string' ? msg : 'Failed to save RFID layout.');
       }
+    });
+  }
+
+  // ---- Card decks --------------------------------------------------------
+
+  reloadDecks(): void {
+    this.decksService.list().subscribe({
+      next: d => {
+        this.decks = d;
+        if (this.scanTargetDeckId != null && !d.some(x => x.id === this.scanTargetDeckId)) {
+          this.scanTargetDeckId = null;
+        }
+        if (this.scanTargetDeckId == null) {
+          this.scanTargetDeckId = d.find(x => x.isEnabled)?.id ?? d[0]?.id ?? null;
+        }
+      },
+      error: () => this.toastr.error('Failed to load decks.')
+    });
+  }
+
+  createDeck(): void {
+    const name = this.newDeckName.trim();
+    if (!name) return;
+    this.decksService.create(name).subscribe({
+      next: () => {
+        this.newDeckName = '';
+        this.toastr.success(`Deck "${name}" created.`);
+        this.reloadDecks();
+      },
+      error: err => this.toastr.error(err?.error ?? 'Failed to create deck.')
+    });
+  }
+
+  startDeckRename(deck: Deck): void {
+    this.editingDeckId = deck.id;
+    this.editingDeckName = deck.name;
+  }
+
+  cancelDeckRename(): void {
+    this.editingDeckId = null;
+    this.editingDeckName = '';
+  }
+
+  commitDeckRename(deck: Deck): void {
+    const name = this.editingDeckName.trim();
+    if (!name || name === deck.name) { this.cancelDeckRename(); return; }
+    this.decksService.rename(deck.id, name).subscribe({
+      next: () => {
+        this.cancelDeckRename();
+        this.toastr.success('Deck renamed.');
+        this.reloadDecks();
+      },
+      error: err => this.toastr.error(err?.error ?? 'Failed to rename deck.')
+    });
+  }
+
+  deleteDeck(deck: Deck): void {
+    if (this.decks.length <= 1) return;
+    if (!confirm(`Delete deck "${deck.name}" and all its ${deck.mappingCount} card mapping(s)?`)) return;
+    this.decksService.delete(deck.id).subscribe({
+      next: () => {
+        this.toastr.success(`Deck "${deck.name}" deleted.`);
+        this.reloadDecks();
+        this.loadMappings();
+      },
+      error: err => this.toastr.error(err?.error ?? 'Failed to delete deck.')
     });
   }
 }

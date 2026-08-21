@@ -114,43 +114,33 @@ import {
              [class.folded]="player.isFolded"
              [class.leading]="isLeading(player.seatNumber)"
              [class.trailing]="isTrailing(player.seatNumber)">
+
+          <div class="player-top">
+            <div class="hole">
+              <div *ngFor="let card of player.holeCards; trackBy: trackCard"
+                   class="card hole-card"
+                   [ngClass]="getSuitClass(card.suit)">
+                <span class="rank">{{ getRank(card) }}</span>
+                <span class="suit">{{ getSuit(card) }}</span>
+              </div>
+            </div>
+
+            <div class="equity-pill"
+                 *ngIf="showEquity && !player.isFolded && hasEquity(player.seatNumber)"
+                 [class.dead]="getWin(player.seatNumber) <= 0 && getTie(player.seatNumber) <= 0">
+              {{ getWin(player.seatNumber) | number:'1.0-0' }}%
+            </div>
+          </div>
+
           <div class="player-name">
             <span class="seat">S{{ player.seatNumber }}</span>
-            {{ player.playerName }}
+            <span class="name-text">{{ player.playerName }}</span>
+            <span class="chip-count" *ngIf="player.chipCount != null">{{ player.chipCount | number }}</span>
             <span class="fold-tag" *ngIf="player.isFolded">FOLD</span>
           </div>
-          <div class="chip-count" [class.placeholder]="player.chipCount == null">
-            <span *ngIf="player.chipCount != null; else emptyChips">{{ player.chipCount | number }}</span>
-            <ng-template #emptyChips><span>&nbsp;</span></ng-template>
-          </div>
-          <div class="hole">
-            <div *ngFor="let card of player.holeCards; trackBy: trackCard"
-                 class="card"
-                 [ngClass]="getSuitClass(card.suit)">
-              <span class="rank">{{ getRank(card) }}</span>
-              <span class="suit">{{ getSuit(card) }}</span>
-            </div>
-          </div>
-          <div class="hand-desc" *ngIf="player.handDescription && !player.isFolded">
-            {{ player.handDescription }}
-          </div>
-          <div class="equity" *ngIf="showEquity && !player.isFolded && hasEquity(player.seatNumber)">
-            <div class="bar">
-              <div class="fill win" [style.width.%]="getWin(player.seatNumber)"></div>
-              <div class="fill tie" [style.width.%]="getTie(player.seatNumber)"
-                   [style.left.%]="getWin(player.seatNumber)"></div>
-            </div>
-            <div class="pct">
-              <span class="win-pct fade-swap"
-                    [class.dead]="getWin(player.seatNumber) <= 0 && getTie(player.seatNumber) <= 0"
-                    [attr.data-value]="getWin(player.seatNumber) | number:'1.0-1'">
-                {{ getWin(player.seatNumber) | number:'1.0-1' }}%
-              </span>
-              <span class="tie-pct fade-swap" *ngIf="getTie(player.seatNumber) >= 0.1"
-                    [attr.data-value]="getTie(player.seatNumber) | number:'1.0-1'">
-                +{{ getTie(player.seatNumber) | number:'1.0-1' }}%
-              </span>
-            </div>
+
+          <div class="hand-desc-strip" [class.empty]="!player.handDescription || player.isFolded">
+            {{ (!player.isFolded && player.handDescription) ? player.handDescription : '\u00A0' }}
           </div>
         </div>
       </div>
@@ -222,24 +212,25 @@ import {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 8px;
-      padding: 14px 22px;
-      background: rgba(10, 12, 20, 0.72);
-      border: 1px solid rgba(233, 69, 96, 0.55);
-      border-radius: 14px;
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
-      backdrop-filter: blur(6px);
+      gap: 10px;
+      padding: 10px 18px 12px;
+      background: #1c2230;
+      border: 1px solid rgba(255,255,255,0.55);
+      border-radius: 4px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.55);
+      overflow: visible;
     }
     .pos-bottom .board-panel { bottom: 40px; }
     .pos-top    .board-panel { top: 40px; }
     .pos-center .board-panel { top: 50%; transform: translate(-50%, -50%); }
 
     .street {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       letter-spacing: 0.18em;
-      color: #e94560;
+      color: #e6e9f0;
       text-transform: uppercase;
       font-weight: 700;
+      opacity: 0.85;
     }
 
     .street-row {
@@ -248,13 +239,13 @@ import {
       gap: 12px;
     }
     .blinds {
-      font-size: 0.8rem;
+      font-size: 0.72rem;
       letter-spacing: 0.05em;
       color: #ffd166;
       font-weight: 700;
-      background: rgba(255, 209, 102, 0.12);
-      border: 1px solid rgba(255, 209, 102, 0.4);
-      border-radius: 4px;
+      background: #2a3446;
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 3px;
       padding: 2px 8px;
     }
 
@@ -293,36 +284,52 @@ import {
     }
     .tournament-info .ti-next .ti-value { color: #e6ecef; }
 
-    .cards-row { display: flex; gap: 8px; }
+    .cards-row { display: flex; gap: 6px; margin-top: 0; }
 
     /* ---- Card ---- */
     .card {
       width: 62px;
       height: 88px;
-      background: #fff;
+      background: linear-gradient(180deg, #ffffff 0%, #ececec 100%);
       color: #222;
-      border-radius: 8px;
+      border-radius: 6px;
+      border: 1px solid #6c7280;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       font-weight: 700;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+      /* Layered shadow: crisp contact + soft ambient + drop, plus inner highlight */
+      box-shadow:
+        0 1px 0 rgba(255,255,255,0.85) inset,
+        0 -1px 0 rgba(0,0,0,0.18) inset,
+        0 1px 1px rgba(0,0,0,0.4),
+        0 6px 8px rgba(0,0,0,0.55),
+        0 12px 18px rgba(0,0,0,0.45);
       animation: pop 240ms ease-out;
     }
-    .card .rank { font-size: 1.55rem; line-height: 1; }
-    .card .suit { font-size: 1.35rem; line-height: 1; margin-top: 2px; }
+    .card .rank { font-size: 3.2rem; line-height: 0.85; font-weight: 800; }
+    .card .suit { font-size: 2.9rem; line-height: 0.85; margin-top: -2px; }
     .card.hearts, .card.diamonds { color: #d0021b; }
     .card.clubs,  .card.spades   { color: #111; }
     .card.empty {
-      background: rgba(255,255,255,0.08);
-      border: 2px dashed rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.06);
+      border: 1px dashed rgba(255,255,255,0.22);
       box-shadow: none;
       animation: none;
     }
-    .card.mini { width: 30px; height: 42px; border-radius: 4px; }
-    .card.mini .rank { font-size: 0.8rem; }
-    .card.mini .suit { font-size: 0.7rem; }
+    .card.mini {
+      width: 30px; height: 42px; border-radius: 4px;
+      background: linear-gradient(180deg, #ffffff 0%, #ececec 100%);
+      border: 1px solid #6c7280;
+      box-shadow:
+        0 1px 0 rgba(255,255,255,0.85) inset,
+        0 1px 1px rgba(0,0,0,0.35),
+        0 3px 6px rgba(0,0,0,0.45);
+      transform: none;
+    }
+    .card.mini .rank { font-size: 1.05rem; }
+    .card.mini .suit { font-size: 0.95rem; }
 
     @keyframes pop {
       from { transform: translateY(6px) scale(0.85); opacity: 0; }
@@ -334,11 +341,12 @@ import {
       position: absolute;
       top: 20px;
       right: 20px;
-      background: rgba(10, 12, 20, 0.72);
-      border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 10px;
+      background: #1c2230;
+      border: 1px solid rgba(255,255,255,0.55);
+      border-radius: 4px;
       padding: 8px 12px;
       max-width: 260px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.55);
     }
     .muck-card {
       animation: muckIn 350ms ease;
@@ -354,12 +362,13 @@ import {
       position: absolute;
       top: 20px;
       left: 20px;
-      background: rgba(10, 12, 20, 0.78);
-      border: 1px solid rgba(255,255,255,0.18);
-      border-left: 3px solid #e74c3c;
-      border-radius: 10px;
+      background: #1c2230;
+      border: 1px solid rgba(255,255,255,0.55);
+      border-left: 3px solid #e94560;
+      border-radius: 4px;
       padding: 8px 12px;
       max-width: 280px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.55);
       animation: fadeIn 400ms ease;
     }
     .outs-header {
@@ -403,30 +412,32 @@ import {
     }
     .muck-cards { display: flex; flex-wrap: wrap; gap: 4px; }
 
-    /* ---- Players ---- */
+    /* ---- Players (WPT-style compact broadcast strip) ---- */
     .players {
       position: absolute;
       left: 20px;
       bottom: 20px;
-      display: grid;
-      grid-auto-flow: column;
-      grid-template-rows: repeat(3, auto);
-      grid-auto-columns: minmax(150px, max-content);
-      gap: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
       max-width: calc(100vw - 40px);
     }
     .pos-top .players { top: 20px; bottom: auto; }
 
     .player {
-      background: rgba(10, 12, 20, 0.72);
-      border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 10px;
-      padding: 8px 10px;
-      min-width: 150px;
+      background: #1c2230;
+      border: 1px solid rgba(255,255,255,0.55);
+      border-radius: 3px;
+      padding: 4px 6px 0;
+      width: clamp(204px, 18.7vw, 272px);
+      display: flex;
+      flex-direction: column;
+      overflow: visible;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.55);
     }
     .player.folded { opacity: 0.4; }
-    .player.leading .hand-desc { color: #2ecc71; }
-    .player.trailing .hand-desc { color: #e74c3c; }
+    .player.leading .hand-desc-strip { color: #7ee8a2; }
+    .player.trailing .hand-desc-strip { color: #ff9a9a; }
 
     /* Fold sequence: gray + desaturate, then fade + shrink away. */
     .player.folded {
@@ -440,69 +451,103 @@ import {
     }
     .player.folded .card { box-shadow: none; }
 
-    .player-name {
-      font-size: 0.8rem;
-      display: flex; align-items: center; gap: 6px;
-      margin-bottom: 6px;
+    /* Row 1: hole cards on the left, equity pill on the right. */
+    .player-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      /* Lift the cards so they poke above the container for a 3D pop. */
+      margin-top: -10px;
+      min-height: 46px;
     }
-    .seat { color: #888; font-size: 0.7rem; }
+    .hole { display: flex; gap: 2px; perspective: 400px; }
+    .hole .card.hole-card {
+      width: 34px;
+      height: 48px;
+      border-radius: 4px;
+      background: linear-gradient(180deg, #ffffff 0%, #ececec 100%);
+      border: 1px solid #6c7280;
+      /* Layered shadow: crisp contact shadow + soft ambient + subtle inner highlight */
+      box-shadow:
+        0 1px 0 rgba(255,255,255,0.8) inset,
+        0 -1px 0 rgba(0,0,0,0.15) inset,
+        0 1px 1px rgba(0,0,0,0.4),
+        0 4px 6px rgba(0,0,0,0.55),
+        0 8px 14px rgba(0,0,0,0.45);
+      transform: translateY(-4px) rotateX(6deg);
+      transform-origin: bottom center;
+      animation: pop 240ms ease-out;
+    }
+    .hole .card.hole-card:first-child { transform: translateY(-4px) rotateX(6deg) rotateZ(-1.5deg); }
+    .hole .card.hole-card:last-child  { transform: translateY(-4px) rotateX(6deg) rotateZ( 1.5deg); }
+    .hole .card.hole-card .rank { font-size: 1.35rem; line-height: 0.9; font-weight: 800; }
+    .hole .card.hole-card .suit { font-size: 1.2rem;  line-height: 0.9; margin-top: -1px; }
+
+    .equity-pill {
+      background: #2a3446;
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 3px;
+      color: #fff;
+      font-weight: 800;
+      font-size: 1.3rem;
+      letter-spacing: 0.02em;
+      padding: 4px 10px;
+      min-width: 56px;
+      text-align: center;
+      line-height: 1;
+      align-self: stretch;
+      display: flex; align-items: center; justify-content: center;
+      transition: color 400ms ease;
+    }
+    .equity-pill.dead { color: #ff8080; }
+
+    /* Row 2: player name. */
+    .player-name {
+      display: flex; align-items: baseline; gap: 6px;
+      margin-top: 4px;
+      color: #f2f4f8;
+      font-size: 0.95rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      line-height: 1.1;
+    }
+    .player-name .name-text { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .seat {
+      color: #9aa5b8;
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+    .chip-count {
+      color: #ffd166;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
     .fold-tag {
       background: #e74c3c; color: #fff;
-      border-radius: 3px; padding: 1px 5px;
+      border-radius: 2px; padding: 1px 5px;
       font-size: 0.6rem; letter-spacing: 0.1em;
     }
 
-    .chip-count {
-      color: #ffd166;
-      font-size: 0.75rem;
-      font-weight: 700;
-      margin-bottom: 4px;
-      min-height: 1em;
-      line-height: 1;
-    }
-    .chip-count.placeholder { visibility: hidden; }
-
-    .hole { display: flex; gap: 4px; }
-    .hole .card { width: 40px; height: 56px; border-radius: 5px; }
-    .hole .card .rank { font-size: 1rem; }
-    .hole .card .suit { font-size: 0.9rem; }
-
-    .hand-desc {
-      margin-top: 6px;
-      color: #27ae60;
-      font-size: 0.75rem;
+    /* Row 3: hand description strip. */
+    .hand-desc-strip {
+      margin: 4px -6px 0;
+      background: #2a2f3a;
+      color: #e6e9f0;
+      font-size: 0.78rem;
       font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 3px 6px;
+      min-height: 1.1em;
+      border-top: 1px solid rgba(255,255,255,0.08);
       transition: color 400ms ease;
     }
+    .hand-desc-strip.empty { color: transparent; }
 
-    .equity { margin-top: 6px; width: 100%; }
-    .equity .bar {
-      position: relative;
-      height: 6px;
-      border-radius: 3px;
-      background: rgba(255,255,255,0.12);
-      overflow: hidden;
-    }
-    .equity .fill {
-      position: absolute;
-      top: 0; bottom: 0;
-      left: 0;
-      transition: width 500ms ease, left 500ms ease;
-    }
-    .equity .fill.win { background: #27ae60; }
-    .equity .fill.tie { background: #f39c12; }
-    .equity .pct {
-      display: flex; gap: 6px;
-      font-size: 0.7rem; margin-top: 3px;
-    }
-    .equity .win-pct { color: #2ecc71; font-weight: 600; transition: color 400ms ease; }
-    .equity .win-pct.dead { color: #e74c3c; }
-    .equity .tie-pct { color: #f39c12; }
-
-    /* Fade the whole equity block in the first time it appears for this player. */
-    .equity {
-      animation: fadeIn 500ms ease;
-    }
     @keyframes fadeIn {
       from { opacity: 0; }
       to   { opacity: 1; }

@@ -62,12 +62,12 @@ export class CalibrationService implements OnDestroy {
     return this.http.get<CardMapping[]>('/api/calibration/mappings');
   }
 
-  registerMapping(tagId: string, rank: number, suit: number): Observable<void> {
-    return this.http.post<void>('/api/calibration/mappings', { tagId, rank, suit });
+  registerMapping(deckId: number, tagId: string, rank: number, suit: number): Observable<void> {
+    return this.http.post<void>('/api/calibration/mappings', { deckId, tagId, rank, suit });
   }
 
-  deleteMapping(tagId: string): Observable<void> {
-    return this.http.delete<void>(`/api/calibration/mappings/${tagId}`);
+  deleteMapping(deckId: number, tagId: string): Observable<void> {
+    return this.http.request<void>('delete', '/api/calibration/mappings', { body: { deckId, tagId } });
   }
 
   private resolveToken(): string {

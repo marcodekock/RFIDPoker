@@ -464,17 +464,53 @@ public class RfidReaderService(
 
     private void ProcessAntennaReading(AntennaConfig antenna, HashSet<string> tagIds)
     {
-        var cards = tagIds
-            .Select(t => cardMapper.GetCard(t))
-            .Where(c => c is not null)
-            .Cast<Card>()
+        // Deck lock: once player hole cards from a deck have been latched, tags from
+        // other decks are ignored across the whole table until NewHand() clears the
+        // lock. This lets the dealer shuffle a second deck mid-hand without stray
+        // reads bleeding into player/board/muck state.
+        var lockedDeckId = tableState.ActiveDeckId;
+
+        var resolved = tagIds
+            .Select(t => new { TagId = t, Card = cardMapper.GetCard(t), DeckId = cardMapper.GetDeckId(t) })
+            .Where(x => x.Card is not null && x.DeckId is not null)
             .ToList();
+
+        if (lockedDeckId is int locked)
+        {
+            var filtered = resolved.Where(x => x.DeckId == locked).ToList();
+            if (filtered.Count != resolved.Count)
+            {
+                var rejected = resolved.Where(x => x.DeckId != locked).ToList();
+                foreach (var r in rejected)
+                {
+                    logger.LogDebug(
+                        "Ignoring tag {Tag} ({Card}) from deck {Deck}; table is locked to deck {Locked}.",
+                        r.TagId, r.Card, r.DeckId, locked);
+                }
+            }
+            resolved = filtered;
+        }
+
+        var cards = resolved.Select(x => x.Card!).ToList();
 
         switch (antenna.Function)
         {
             case AntennaFunction.PlayerSeat when antenna.SeatNumber.HasValue:
                 if (cards.Count > 0)
                 {
+                    // First hole card read of the hand locks the table to that deck.
+                    // If somehow multiple deck ids sneak through (shouldn't after the
+                    // filter above, unless the lock was null), take the deck of the
+                    // first resolved card.
+                    if (lockedDeckId is null)
+                    {
+                        var firstDeck = resolved[0].DeckId!.Value;
+                        if (tableState.TryLockDeck(firstDeck))
+                        {
+                            logger.LogInformation("Table locked to deck {Deck} by seat {Seat}.", firstDeck, antenna.SeatNumber.Value);
+                        }
+                    }
+
                     // Card came back to a seat: revert any accidental muck+fold.
                     var wasMucked = cards.Where(c => tableState.MuckedCards.Contains(c)).ToList();
                     if (wasMucked.Count > 0)
@@ -522,6 +558,17 @@ public class RfidReaderService(
 
     private void UpdateCommunityCards()
     {
+        // Community cards only track when the table is "hot" — i.e. hole cards have
+        // been dealt and the deck lock is set. Without that, we could be reading the
+        // dealer shuffling / staging on the felt, or leftover cards from a previous
+        // hand still near the board antenna. Bail out and clear any stale board state.
+        if (tableState.ActiveDeckId is null)
+        {
+            if (tableState.CommunityCards.Count > 0)
+                tableState.SetCommunityCards([]);
+            return;
+        }
+
         // Collect the current set of cards present on any board antenna (flop pair + turn/river).
         // We iterate antennas and (unordered) tag sets, so we can't derive the visual order
         // directly from tag storage — we have to preserve the previous board order below.
@@ -547,7 +594,13 @@ public class RfidReaderService(
                 foreach (var tagId in tags)
                 {
                     var card = cardMapper.GetCard(tagId);
-                    if (card is not null) currentSet.Add(card);
+                    if (card is null) continue;
+                    // Honor the deck lock: reject tags from other decks so a stray
+                    // read from the "off" deck can't add a phantom board card.
+                    if (tableState.ActiveDeckId is int locked
+                        && cardMapper.GetDeckId(tagId) is int deckId
+                        && deckId != locked) continue;
+                    currentSet.Add(card);
                 }
             }
         }

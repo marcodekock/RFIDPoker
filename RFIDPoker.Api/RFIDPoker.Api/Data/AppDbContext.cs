@@ -10,6 +10,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     : IdentityDbContext<ApplicationUser, IdentityRole, string>(options)
 {
     public DbSet<CardMappingEntity> CardMappings => Set<CardMappingEntity>();
+    public DbSet<DeckEntity> Decks => Set<DeckEntity>();
     public DbSet<OverlayToken> OverlayTokens => Set<OverlayToken>();
     public DbSet<Camera> Cameras => Set<Camera>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
@@ -24,10 +25,22 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         modelBuilder.Entity<CardMappingEntity>(e =>
         {
             e.ToTable("CardMappings");
-            e.HasKey(x => x.TagId);
+            e.HasKey(x => new { x.DeckId, x.TagId });
             e.Property(x => x.TagId).HasMaxLength(64);
             e.Property(x => x.Rank).IsRequired();
             e.Property(x => x.Suit).IsRequired();
+            e.HasOne(x => x.Deck)
+             .WithMany(d => d.Mappings)
+             .HasForeignKey(x => x.DeckId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DeckEntity>(e =>
+        {
+            e.ToTable("Decks");
+            e.HasKey(d => d.Id);
+            e.Property(d => d.Name).HasMaxLength(128).IsRequired();
+            e.HasIndex(d => d.Name).IsUnique();
         });
 
         modelBuilder.Entity<OverlayToken>(e =>
@@ -83,7 +96,18 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 
 public class CardMappingEntity
 {
+    public int DeckId { get; set; }
+    public DeckEntity? Deck { get; set; }
     public string TagId { get; set; } = string.Empty;
     public Rank Rank { get; set; }
     public Suit Suit { get; set; }
+}
+
+public class DeckEntity
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    /// <summary>When true, this deck's mappings are merged into the runtime tag lookup.</summary>
+    public bool IsEnabled { get; set; } = true;
+    public List<CardMappingEntity> Mappings { get; set; } = [];
 }

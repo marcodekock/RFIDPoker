@@ -14,6 +14,22 @@ public interface ITableStateManager
     string? Blinds { get; }
     void SetBlinds(string? blinds);
 
+    /// <summary>
+    /// The deck currently "locked in" for this hand. Set the first time a player hole
+    /// card is accepted; every subsequent tag read is filtered to this deck until
+    /// <see cref="NewHand"/> clears the table. This lets the dealer shuffle one deck
+    /// while another is in play without cross-contamination. Null means no deck is
+    /// locked yet (any enabled deck's tags may be read).
+    /// </summary>
+    int? ActiveDeckId { get; }
+
+    /// <summary>
+    /// Attempts to lock the table to <paramref name="deckId"/>. If no deck is currently
+    /// locked the lock is set and true is returned. If a different deck is already
+    /// locked, returns false and the lock is unchanged.
+    /// </summary>
+    bool TryLockDeck(int deckId);
+
     event Action? StateChanged;
 
     /// <summary>
@@ -53,9 +69,34 @@ public class TableStateManager : ITableStateManager
     private readonly HashSet<Card> _muckedSet = [];
 
     private string? _blinds;
+    private int? _activeDeckId;
     public string? Blinds
     {
         get { lock (_lock) { return _blinds; } }
+    }
+
+    public int? ActiveDeckId
+    {
+        get { lock (_lock) { return _activeDeckId; } }
+    }
+
+    public bool TryLockDeck(int deckId)
+    {
+        bool changed = false;
+        lock (_lock)
+        {
+            if (_activeDeckId is null)
+            {
+                _activeDeckId = deckId;
+                changed = true;
+            }
+            else if (_activeDeckId.Value != deckId)
+            {
+                return false;
+            }
+        }
+        if (changed) StateChanged?.Invoke();
+        return true;
     }
 
     public void SetBlinds(string? blinds)
@@ -304,6 +345,7 @@ public class TableStateManager : ITableStateManager
             CommunityCards.Clear();
             _muckedCards.Clear();
             _muckedSet.Clear();
+            _activeDeckId = null;
             foreach (var p in Players)
             {
                 p.HoleCards.Clear();

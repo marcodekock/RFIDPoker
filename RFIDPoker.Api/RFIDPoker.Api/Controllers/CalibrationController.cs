@@ -20,7 +20,7 @@ public class CalibrationController(
     public ActionResult<List<CardMappingDto>> GetMappings()
     {
         var mappings = cardMapper.GetAllMappings()
-            .Select(kv => new CardMappingDto(kv.Key, (int)kv.Value.Rank, (int)kv.Value.Suit))
+            .Select(m => new CardMappingDto(m.DeckId, m.DeckName, m.TagId, (int)m.Rank, (int)m.Suit))
             .ToList();
         return Ok(mappings);
     }
@@ -30,16 +30,25 @@ public class CalibrationController(
     {
         if (!Enum.IsDefined(typeof(Rank), request.Rank) || !Enum.IsDefined(typeof(Suit), request.Suit))
             return BadRequest("Invalid rank or suit value.");
+        if (request.DeckId <= 0)
+            return BadRequest("DeckId is required.");
 
         var card = new Card((Rank)request.Rank, (Suit)request.Suit);
-        cardMapper.RegisterMapping(request.TagId, card);
+        try
+        {
+            cardMapper.RegisterMapping(request.DeckId, request.TagId, card);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
         return Ok();
     }
 
-    [HttpDelete("mappings/{tagId}")]
-    public IActionResult DeleteMapping(string tagId)
+    [HttpDelete("mappings")]
+    public IActionResult DeleteMapping([FromBody] DeleteMappingRequest request)
     {
-        var removed = cardMapper.DeleteMapping(tagId);
+        var removed = cardMapper.DeleteMapping(request.DeckId, request.TagId);
         return removed ? NoContent() : NotFound();
     }
 

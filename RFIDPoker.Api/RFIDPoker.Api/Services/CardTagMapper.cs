@@ -8,16 +8,25 @@ public interface ICardTagMapper
 {
     Card? GetCard(string tagId);
     string? GetTagId(Card card);
-    void RegisterMapping(string tagId, Card card);
-    bool DeleteMapping(string tagId);
-    IReadOnlyDictionary<string, Card> GetAllMappings();
+
+    /// <summary>Returns the deck id of the deck a tag currently maps to, or null if unknown.</summary>
+    int? GetDeckId(string tagId);
+
+    void RegisterMapping(int deckId, string tagId, Card card);
+    bool DeleteMapping(int deckId, string tagId);
+    IReadOnlyList<CardMappingSnapshot> GetAllMappings();
+
+    /// <summary>Re-read mappings for all currently-enabled decks.</summary>
+    void Reload();
 }
 
+public record CardMappingSnapshot(int DeckId, string DeckName, string TagId, Rank Rank, Suit Suit);
+
 /// <summary>
-/// Maps RFID tag IDs to playing cards. Mappings are persisted in a SQLite database via
-/// <see cref="AppDbContext"/> and cached in memory for fast lookup on the RFID hot path.
-/// Optional seed entries from configuration ("CardMappings" section) are inserted on first
-/// startup only if the DB is empty.
+/// Maps RFID tag IDs to playing cards. The runtime lookup is the UNION of every
+/// deck flagged <see cref="DeckEntity.IsEnabled"/>. If the same tag exists in
+/// multiple enabled decks the highest deck id wins (deterministic and predictable).
+/// Writes always target a specific deck id chosen by the caller.
 /// </summary>
 public class CardTagMapper : ICardTagMapper
 {
@@ -26,29 +35,17 @@ public class CardTagMapper : ICardTagMapper
     private readonly object _sync = new();
     private readonly Dictionary<string, Card> _tagToCard = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Card, string> _cardToTag = [];
+    private readonly Dictionary<string, int> _tagToDeck = new(StringComparer.OrdinalIgnoreCase);
 
-    public CardTagMapper(
-        IServiceScopeFactory scopeFactory,
-        IConfiguration configuration,
-        ILogger<CardTagMapper> logger)
+    public CardTagMapper(IServiceScopeFactory scopeFactory, ILogger<CardTagMapper> logger)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
 
-        using var scope = scopeFactory.CreateScope();
+        using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        // Database is created/migrated at startup (Program.cs); no EnsureCreated here.
-
-        SeedFromConfiguration(db, configuration);
-
-        foreach (var entity in db.CardMappings.AsNoTracking().ToList())
-        {
-            var card = new Card(entity.Rank, entity.Suit);
-            _tagToCard[entity.TagId] = card;
-            _cardToTag[card] = entity.TagId;
-        }
-
-        _logger.LogInformation("Loaded {Count} card mapping(s) from database.", _tagToCard.Count);
+        EnsureDefaultDeck(db);
+        LoadMappings(db);
     }
 
     public Card? GetCard(string tagId)
@@ -67,34 +64,39 @@ public class CardTagMapper : ICardTagMapper
         }
     }
 
-    public void RegisterMapping(string tagId, Card card)
+    public int? GetDeckId(string tagId)
     {
         lock (_sync)
         {
-            // If this card was previously bound to a different tag, drop the old binding.
-            if (_cardToTag.TryGetValue(card, out var existingTag) &&
-                !string.Equals(existingTag, tagId, StringComparison.OrdinalIgnoreCase))
-            {
-                _tagToCard.Remove(existingTag);
-            }
-
-            _tagToCard[tagId] = card;
-            _cardToTag[card] = tagId;
+            return _tagToDeck.TryGetValue(tagId, out var deckId) ? deckId : null;
         }
+    }
 
+    public void RegisterMapping(int deckId, string tagId, Card card)
+    {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        // Remove any prior row for this card (different tag) then upsert this tag.
+        if (!db.Decks.Any(d => d.Id == deckId))
+            throw new InvalidOperationException($"Deck {deckId} not found.");
+
+        // Remove any prior row within this deck for this card (different tag) so the
+        // (rank, suit) slot is unique per deck.
         var stale = db.CardMappings
-            .Where(m => m.Rank == card.Rank && m.Suit == card.Suit && m.TagId != tagId)
+            .Where(m => m.DeckId == deckId && m.Rank == card.Rank && m.Suit == card.Suit && m.TagId != tagId)
             .ToList();
         if (stale.Count > 0) db.CardMappings.RemoveRange(stale);
 
-        var existing = db.CardMappings.FirstOrDefault(m => m.TagId == tagId);
+        var existing = db.CardMappings.FirstOrDefault(m => m.DeckId == deckId && m.TagId == tagId);
         if (existing is null)
         {
-            db.CardMappings.Add(new CardMappingEntity { TagId = tagId, Rank = card.Rank, Suit = card.Suit });
+            db.CardMappings.Add(new CardMappingEntity
+            {
+                DeckId = deckId,
+                TagId = tagId,
+                Rank = card.Rank,
+                Suit = card.Suit
+            });
         }
         else
         {
@@ -103,72 +105,74 @@ public class CardTagMapper : ICardTagMapper
         }
 
         db.SaveChanges();
+        LoadMappings(db);
     }
 
-    public bool DeleteMapping(string tagId)
+    public bool DeleteMapping(int deckId, string tagId)
     {
-        lock (_sync)
-        {
-            if (!_tagToCard.TryGetValue(tagId, out var card)) return false;
-            _tagToCard.Remove(tagId);
-            _cardToTag.Remove(card);
-        }
-
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var row = db.CardMappings.FirstOrDefault(m => m.TagId == tagId);
-        if (row is null) return true;
+        var row = db.CardMappings.FirstOrDefault(m => m.DeckId == deckId && m.TagId == tagId);
+        if (row is null) return false;
 
         db.CardMappings.Remove(row);
         db.SaveChanges();
+        LoadMappings(db);
         return true;
     }
 
-    public IReadOnlyDictionary<string, Card> GetAllMappings()
+    public IReadOnlyList<CardMappingSnapshot> GetAllMappings()
     {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return db.CardMappings
+            .AsNoTracking()
+            .Include(m => m.Deck)
+            .OrderBy(m => m.DeckId)
+            .ThenBy(m => m.Suit)
+            .ThenBy(m => m.Rank)
+            .Select(m => new CardMappingSnapshot(m.DeckId, m.Deck!.Name, m.TagId, m.Rank, m.Suit))
+            .ToList();
+    }
+
+    public void Reload()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        LoadMappings(db);
+    }
+
+    private void LoadMappings(AppDbContext db)
+    {
+        // Union of every enabled deck's mappings. Higher DeckId wins on tag collisions
+        // so the ordering here matters: iterate low-to-high, later writes overwrite.
+        var rows = db.CardMappings
+            .AsNoTracking()
+            .Where(m => m.Deck!.IsEnabled)
+            .OrderBy(m => m.DeckId)
+            .ToList();
+
         lock (_sync)
         {
-            return _tagToCard.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            _tagToCard.Clear();
+            _cardToTag.Clear();
+            _tagToDeck.Clear();
+            foreach (var entity in rows)
+            {
+                var card = new Card(entity.Rank, entity.Suit);
+                _tagToCard[entity.TagId] = card;
+                _cardToTag[card] = entity.TagId;
+                _tagToDeck[entity.TagId] = entity.DeckId;
+            }
         }
+
+        _logger.LogInformation("Loaded {Count} mapping(s) across enabled deck(s).", rows.Count);
     }
 
-    private void SeedFromConfiguration(AppDbContext db, IConfiguration configuration)
+    private static void EnsureDefaultDeck(AppDbContext db)
     {
-        if (db.CardMappings.Any()) return;
-
-        var section = configuration.GetSection("CardMappings");
-        if (!section.Exists()) return;
-
-        var seeded = 0;
-        foreach (var child in section.GetChildren())
-        {
-            var tagId = child.Key;
-            if (!TryParseCard(child.Value, out var card)) continue;
-
-            db.CardMappings.Add(new CardMappingEntity { TagId = tagId, Rank = card.Rank, Suit = card.Suit });
-            seeded++;
-        }
-
-        if (seeded > 0)
-        {
-            db.SaveChanges();
-            _logger.LogInformation("Seeded {Count} card mapping(s) from configuration.", seeded);
-        }
-    }
-
-    private static bool TryParseCard(string? value, out Card card)
-    {
-        card = default!;
-        if (string.IsNullOrWhiteSpace(value)) return false;
-
-        // Expected format: "Rank_Suit" e.g. "Ace_Spades", "Two_Hearts"
-        var parts = value.Split('_');
-        if (parts.Length != 2) return false;
-
-        if (!Enum.TryParse<Rank>(parts[0], true, out var rank)) return false;
-        if (!Enum.TryParse<Suit>(parts[1], true, out var suit)) return false;
-
-        card = new Card(rank, suit);
-        return true;
+        if (db.Decks.Any()) return;
+        db.Decks.Add(new DeckEntity { Name = "Default Deck", IsEnabled = true });
+        db.SaveChanges();
     }
 }

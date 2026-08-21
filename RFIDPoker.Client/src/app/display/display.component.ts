@@ -22,7 +22,8 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
           <div *ngFor="let card of analysis.muckedCards; trackBy: trackCard"
                class="card-display small"
                [ngClass]="getSuitClass(card.suit)">
-            {{ getCardLabel(card) }}
+            <span class="rank">{{ getRank(card) }}</span>
+            <span class="suit">{{ getSuit(card) }}</span>
           </div>
         </div>
       </div>
@@ -60,7 +61,8 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
                    class="card-display"
                    [ngClass]="getSuitClass(card.suit)"
                    [class.dim]="player.folded">
-                {{ getCardLabel(card) }}
+                <span class="rank">{{ getRank(card) }}</span>
+                <span class="suit">{{ getSuit(card) }}</span>
               </div>
             </div>
 
@@ -91,7 +93,8 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
             <div *ngFor="let card of analysis.communityCards; trackBy: trackCard"
                  class="card-display"
                  [ngClass]="getSuitClass(card.suit)">
-              {{ getCardLabel(card) }}
+              <span class="rank">{{ getRank(card) }}</span>
+              <span class="suit">{{ getSuit(card) }}</span>
             </div>
             <div *ngFor="let slot of getEmptySlots(); trackBy: trackIndex" class="card-display empty">?</div>
           </div>
@@ -117,7 +120,8 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
                    class="card-display"
                    [ngClass]="getSuitClass(card.suit)"
                    [class.dim]="player.folded">
-                {{ getCardLabel(card) }}
+                <span class="rank">{{ getRank(card) }}</span>
+                <span class="suit">{{ getSuit(card) }}</span>
               </div>
             </div>
 
@@ -163,7 +167,14 @@ import { AnalysisResult, PlayerAnalysis, RANK_NAMES, SUIT_SYMBOLS, SUIT_NAMES, S
     .muck-panel h3 { margin: 0 0 0.4rem 0; font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.4rem; }
     .muck-panel .muck-count { background: #e74c3c; color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 0.7rem; }
     .muck-cards { display: flex; flex-wrap: wrap; gap: 3px; }
-    .card-display.small { font-size: 0.75rem; padding: 2px 5px; min-width: 26px; }
+    .card-display.small { font-size: 0.95rem; padding: 2px 5px; min-width: 26px; }
+    .card-display { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; }
+    .card-display .rank { font-size: 2.35rem; line-height: 0.85; font-weight: 800; }
+    .card-display .suit { font-size: 2.05rem; line-height: 0.85; margin-top: -2px; }
+    .card-display.small .rank { font-size: 1.25rem; }
+    .card-display.small .suit { font-size: 1.1rem; margin-top: 0; }
+    .hole-cards .card-display .rank { font-size: 2.8rem; }
+    .hole-cards .card-display .suit { font-size: 2.4rem; }
     header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
     h1 { font-size: 1.5rem; color: #e94560; }
     .player-count { color: #888; font-size: 0.9rem; }
@@ -252,6 +263,9 @@ export class DisplayComponent implements OnInit, OnDestroy {
   getCardLabel(card: { rank: number; suit: number }): string {
     return `${RANK_NAMES[card.rank] ?? '?'}${SUIT_SYMBOLS[card.suit] ?? ''}`;
   }
+
+  getRank(card: { rank: number }): string { return RANK_NAMES[card.rank] ?? '?'; }
+  getSuit(card: { suit: number }): string { return SUIT_SYMBOLS[card.suit] ?? ''; }
 
   getSuitClass(suit: number): string {
     return (SUIT_NAMES[suit] ?? '').toLowerCase();

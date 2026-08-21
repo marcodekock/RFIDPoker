@@ -64,6 +64,8 @@ export interface BreakState {
 }
 
 export interface CardMapping {
+  deckId: number;
+  deckName: string;
   tagId: string;
   rank: number;
   suit: number;
